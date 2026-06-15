@@ -1,0 +1,90 @@
+{
+  "slug": "infosec-practitioner",
+  "display_name": "The Practitioner Brief",
+  "category_main": "Cybersecurity",
+  "category_sub": "Intel",
+  "subtitle": "Threat intelligence, vulnerability research & defensive tradecraft for security professionals",
+  "implications_label": "For Defenders",
+  "footer_tagline": "Curated for cybersecurity practitioners who ship detections, not decks.",
+  "theme": {
+    "bg_dark": "#0D1117",
+    "primary": "#E05C2A",
+    "accent": "#FF8C5A",
+    "ink": "#16181D"
+  },
+  "audience": "Cybersecurity practitioners — SOC analysts, incident responders, red teamers, detection engineers, and security architects — who live in terminals and ticket queues. They already understand attacker TTPs, CVE scoring, and the MITRE ATT&CK framework. They need a brief that surfaces actionable threat intelligence, newly weaponized vulnerabilities, and tooling shifts before their Monday standup — not vendor marketing dressed as news.",
+  "in_scope": [
+    "Active exploitation of CVEs and zero-days in the wild",
+    "Threat actor campaigns, TTPs, and attribution updates",
+    "Malware analysis and reverse-engineering findings",
+    "Detection engineering: new rules, sigma/YARA releases, log-source changes",
+    "Offensive tooling releases and red-team technique evolution",
+    "Incident response case studies and post-mortems",
+    "Ransomware group activity, leak-site intelligence, and extortion trends",
+    "Critical infrastructure and OT/ICS threat developments"
+  ],
+  "out_scope": [
+    "Generic 'cybersecurity awareness' tips aimed at end users",
+    "Vendor product launches and feature announcements without technical depth",
+    "Compliance and audit checklists (SOC 2, ISO 27001 checkbox content)",
+    "Executive/CISO boardroom narrative and risk-appetite framing",
+    "Consumer privacy and data-broker stories with no practitioner angle"
+  ],
+  "sources": [
+    "therecord.media",
+    "krebsonsecurity.com",
+    "darkreading.com",
+    "bleepingcomputer.com",
+    "securityweek.com",
+    "threatpost.com",
+    "unit42.paloaltonetworks.com",
+    "research.checkpoint.com",
+    "blog.talosintelligence.com",
+    "googleprojectzero.blogspot.com",
+    "nvd.nist.gov",
+    "cisa.gov",
+    "msrc.microsoft.com",
+    "securelist.com",
+    "mandiant.com"
+  ],
+  "feeds": [
+    "https://therecord.media/feed",
+    "https://krebsonsecurity.com/feed/",
+    "https://www.darkreading.com/rss.xml",
+    "https://www.bleepingcomputer.com/feed/",
+    "https://www.securityweek.com/feed/",
+    "https://blog.talosintelligence.com/feeds/posts/default",
+    "https://securelist.com/feed/",
+    "https://feeds.feedburner.com/TheHackersNews"
+  ],
+  "relevance_gate": "Would a SOC analyst or incident responder change their detection rules, patch priority, or hunt hypothesis after reading this?",
+  "tracks": [
+    {
+      "name": "Threat Intel",
+      "desc": "Active campaigns, threat actor TTPs, attribution updates, and IOC releases from credible research teams"
+    },
+    {
+      "name": "Vuln Watch",
+      "desc": "CVEs being actively exploited in the wild, PoC drops, CVSS context, and patch urgency assessments"
+    },
+    {
+      "name": "Malware & Tooling",
+      "desc": "New malware family analysis, C2 framework updates, offensive tool releases, and reverse-engineering findings"
+    },
+    {
+      "name": "Detection & Response",
+      "desc": "New Sigma/YARA rules, SIEM/EDR log-source changes, IR playbook updates, and post-incident case studies"
+    },
+    {
+      "name": "Ransomware & eCrime",
+      "desc": "Ransomware group activity, leak-site intelligence, affiliate ecosystem shifts, and extortion technique evolution"
+    },
+    {
+      "name": "Critical Infrastructure",
+      "desc": "OT/ICS/SCADA threats, CNI sector targeting, and government advisories with operational relevance"
+    }
+  ],
+  "geography": "Global",
+  "self_coverage": null,
+  "tone": "Direct, analyst-to-analyst — technical precision over narrative polish, zero vendor hype, and always leading with what defenders should do next."
+}

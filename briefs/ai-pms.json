@@ -1,0 +1,82 @@
+{
+  "slug": "ai-pms",
+  "display_name": "The AI PM Brief",
+  "category_main": "AI Product",
+  "category_sub": "Intel",
+  "subtitle": "The intelligence brief on models, agents, evals & shipping AI products",
+  "implications_label": "For AI PMs",
+  "footer_tagline": "Curated for AI product managers.",
+  "theme": {
+    "bg_dark": "#13122B",
+    "primary": "#4F46E5",
+    "accent": "#A78BFA",
+    "ink": "#17161D"
+  },
+  "audience": "Product managers building AI/LLM-powered products at startups and tech companies. They ship features on top of foundation models, care about evals, latency, cost, and UX patterns, and need to track model releases and competitor moves. They do NOT need ML research math explained.",
+  "in_scope": [
+    "Foundation-model releases + pricing/capability changes (OpenAI, Anthropic, Google, Meta, Mistral)",
+    "Agent frameworks, tool-use, and orchestration patterns",
+    "Eval methods, benchmarks, and quality/safety tooling",
+    "Notable AI product launches + UX patterns worth copying",
+    "Cost / latency / inference economics shifts",
+    "AI regulation + policy that changes what PMs can ship"
+  ],
+  "out_scope": [
+    "Pure ML research papers with no product implication",
+    "Hardware/chip deep-dives (unless they change inference cost for app builders)",
+    "Crypto / web3 'AI' tokens",
+    "Enterprise sales-org gossip and funding-round noise without a product angle",
+    "Academic theory threads with no shippable takeaway"
+  ],
+  "sources": [
+    "techcrunch.com",
+    "theverge.com",
+    "arstechnica.com",
+    "theinformation.com",
+    "venturebeat.com",
+    "wired.com",
+    "technologyreview.com",
+    "semianalysis.com",
+    "huggingface.co",
+    "reuters.com",
+    "bloomberg.com",
+    "cnbc.com"
+  ],
+  "feeds": [
+    "https://techcrunch.com/feed/",
+    "https://www.theverge.com/rss/index.xml",
+    "https://venturebeat.com/feed/",
+    "https://huggingface.co/blog/feed.xml",
+    "https://www.technologyreview.com/feed/"
+  ],
+  "relevance_gate": "Would a PM building an AI product realistically change their roadmap, model choice, evals, or UX after reading this?",
+  "tracks": [
+    {
+      "name": "Models",
+      "desc": "Foundation-model releases, pricing, context-window/capability changes from OpenAI, Anthropic, Google, Meta, Mistral, and challengers."
+    },
+    {
+      "name": "Agents & Tooling",
+      "desc": "Agent frameworks, tool-use, orchestration (LangGraph, MCP, function-calling), and the SDKs PMs build on."
+    },
+    {
+      "name": "Evals & Quality",
+      "desc": "Benchmarks, eval methods, hallucination/safety tooling, and how teams measure LLM output quality."
+    },
+    {
+      "name": "Products & UX",
+      "desc": "Notable AI product launches and interface patterns (chat, inline, agentic) worth studying or copying."
+    },
+    {
+      "name": "Economics",
+      "desc": "Inference cost, latency, pricing moves, and the unit-economics shifts that change what's viable to ship."
+    },
+    {
+      "name": "Policy",
+      "desc": "AI regulation, model-access changes, and platform policy that affects what PMs can legally or practically ship."
+    }
+  ],
+  "geography": "US-first",
+  "self_coverage": null,
+  "tone": "Direct, practitioner-to-practitioner, no hype, assumes fluency in shipping software."
+}

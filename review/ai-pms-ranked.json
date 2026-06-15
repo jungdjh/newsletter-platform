@@ -1,0 +1,87 @@
+{
+  "newsletter": "ai-pms",
+  "content": {
+    "top_stories": [
+      {
+        "track": "Agents & Tooling",
+        "headline": "Claude Sonnet 4.5 silently broke production structured outputs",
+        "summary": "A team running a Claude-powered reporting pipeline discovered that upgrading to Sonnet 4.5 caused the model to fold JSON payload fields and start asking clarifying questions — behaviors that crashed downstream systems. Rolling back to 4.0 required requalifying every API integration under time pressure.",
+        "published_at": null,
+        "dateline": "San Francisco",
+        "source_url": "https://venturebeat.com/orchestration/when-claude-changed-everything-changed-managing-ai-blast-radius-in-production",
+        "source_excerpt": "Then we rolled out 4.5. For a meaningful percentage of requests, the model began folding the contents of post_body into the description field. Two failure modes followed. First, the filter parameters never reached the API. Our system read post_body as the source of truth for the request payload, and that field came back empty. The API call was made without the date range or region filter. Depending on the specific API being called, the backend either returned sales volume for all time or all regions or returned a 500 error. Second, the model started asking clarifying questions in its response. This was new. Earlier versions always took a best-effort approach to an ambiguous request and returned a structured object. Sonnet 4.5, being more cautious, would sometimes respond with a question instead. Our system had no path for this. It had been built on the assumption that every model invocation would result in an API call. There was no human-in-the-loop component and no state to hold a partially completed request. This caused downstream systems to break in multiple ways. We rolled back to 4.0. That was harder than it should have been: Between the 4.0 and 4.5 deployments, our team had added new API integrations, all of which were qualified against 4.5. Reverting the model meant requalifying every one of them against 4.0 under time pressure.",
+        "hero_image_url": null,
+        "implications": [
+          "Pin model versions in prod and run structured-output evals before every upgrade",
+          "Design pipelines to handle clarifying-question responses, not just structured JSON"
+        ]
+      },
+      {
+        "track": "Evals & Quality",
+        "headline": "OpenAI Lockdown Mode limits agent features to block prompt injection",
+        "summary": "OpenAI is rolling out Lockdown Mode to ChatGPT Business accounts, disabling live web browsing, image retrieval, deep research, and agent mode. The goal is to reduce data exfiltration risk from prompt injection — though OpenAI acknowledges it doesn't eliminate the threat.",
+        "published_at": "2026-06-06T20:32:24+00:00",
+        "dateline": "San Francisco",
+        "source_url": "https://techcrunch.com/2026/06/06/openai-unveils-lockdown-mode-to-protect-sensitive-data-from-prompt-injection-attacks/",
+        "source_excerpt": "Among other things, Lockdown Mode will disable live web browsing (so you can only access cached content), the retrieval and display of images from the web (you can still generate images), deep research, and agent mode. The company says that even with Lockdown Mode turned on, ChatGPT could still be vulnerable to prompt injections — which could, for example, ",
+        "response.": "Lockdown Mode is not intended for everyone,",
+        "It is designed for people and organizations that handle sensitive data and want stricter protection from data exfiltration risks related to prompt injection.": "he company says it's currently rolling Lockdown Mode out to self-serve ChatGPT Business accounts, as well as eligible personal accounts.",
+        "hero_image_url": null,
+        "implications": [
+          "Evaluate Lockdown Mode for any ChatGPT Business deployment handling sensitive customer data",
+          "Treat prompt injection as a first-class threat in your agent security model, not an edge case"
+        ]
+      },
+      {
+        "track": "Products & UX",
+        "headline": "OpenAI pivots ChatGPT toward agentic super app model",
+        "summary": "OpenAI plans a revamped ChatGPT in coming weeks built around coding tools and AI agents, with one senior employee declaring \"Chat is dead.\" The company is abandoning standalone side projects like Sora to consolidate around a single agentic product gateway.",
+        "published_at": "2026-06-07T16:23:22+00:00",
+        "dateline": "San Francisco",
+        "source_url": "https://techcrunch.com/2026/06/07/openai-is-still-working-on-that-super-app/",
+        "source_excerpt": "OpenAI plans to roll out a revamped version of ChatGPT in the coming weeks — one that will serve as a \"super app\" with coding tools and AI agents, according to the Financial Times. The company's goal is reportedly to become more competitive with Anthropic, particularly among business customers, and to get closer to profitability before an IPO. That means turning ChatGPT into a gateway leading free users to products they might actually pay for, such as coding product Codex. In fact, the FT quotes one senior OpenAI employee as declaring, \"Chat is dead.\" Thibault Sottiaux, who leads OpenAI's core product and platform, said the company is working towards a product ",
+        "work.": "hero_image_url",
+        "implications": [
+          "Expect ChatGPT's UX surface to shift toward task delegation — audit your integration assumptions now",
+          "OpenAI's Codex push signals coding agents as the primary monetization wedge to watch"
+        ]
+      }
+    ],
+    "other_news": [
+      {
+        "track": "Economics",
+        "headline": "GitHub Copilot token pricing triggers industry cost reckoning",
+        "subtitle": "Flat-rate AI subsidies are ending; per-token bills are arriving.",
+        "source_url": "https://techcrunch.com/2026/06/07/is-this-the-dawn-of-the-tokenpocalypse/",
+        "published_at": "2026-06-07T21:26:00+00:00"
+      },
+      {
+        "track": "Agents & Tooling",
+        "headline": "Agentic coding accelerates but human review becomes the bottleneck",
+        "subtitle": "Agents compress execution time, not ambiguity or accountability.",
+        "source_url": "https://venturebeat.com/technology/agentic-ai-solved-coding-and-exposed-every-other-problem-in-software-engineering",
+        "published_at": null
+      },
+      {
+        "track": "Products & UX",
+        "headline": "Apple WWDC 2026 to debut Gemini-powered Siri and agent app store",
+        "subtitle": "Standalone Siri app targets ChatGPT and Claude directly.",
+        "source_url": "https://techcrunch.com/2026/06/06/what-to-expect-from-wwdc-2026-siris-highly-anticipated-revamp-and-apple-intelligence-updates/",
+        "published_at": "2026-06-06T00:00:00+00:00"
+      }
+    ],
+    "anomalies": [
+      "VentureBeat articles did not return published_at or og_image_url via web_fetch; blast radius article confirmed fresh via search metadata ('1 day ago'); agentic AI article confirmed fresh via feed date (2026-06-07)",
+      "All og_image candidates rejected by vision check or unavailable; all hero_image_url fields set to null",
+      "Tokenpocalypse article published_at set from search metadata timestamp (June 7, 2026 1:26 PM PDT)"
+    ]
+  },
+  "meta": {
+    "issue_number": 1,
+    "date_dd_mm_yy": "07.06.26",
+    "weekday_str": "Sun",
+    "edition_label": "AFTERNOON EDI.",
+    "filed_time_ct": "23:11 CT",
+    "min_read": 6
+  }
+}

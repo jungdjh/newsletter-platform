@@ -1,0 +1,89 @@
+{
+  "slug": "nursing-student-intel",
+  "display_name": "The Nursing Student Brief",
+  "category_main": "Nursing Education",
+  "category_sub": "Intel",
+  "subtitle": "Clinical updates, board prep, and career intelligence for the next generation of nurses",
+  "implications_label": "For Nursing Students",
+  "footer_tagline": "Curated for nursing students navigating school, clinicals, and the path to licensure.",
+  "audience": "Pre-licensure nursing students in ADN, BSN, and accelerated programs who are balancing coursework, clinical rotations, and NCLEX preparation. They have foundational anatomy, pharmacology, and pathophysiology knowledge but are still building clinical judgment. They need concise, credible intelligence on exam changes, scope-of-practice shifts, healthcare workforce trends, and evidence-based practice updates that directly affect their training and early career.",
+  "in_scope": [
+    "NCLEX-RN and NCLEX-PN exam updates, Next Generation NCLEX (NGN) changes, and board prep strategies",
+    "Nursing school curriculum changes, accreditation news, and simulation-based learning innovations",
+    "Clinical skills, evidence-based practice guidelines, and patient safety updates relevant to new nurses",
+    "Nursing workforce trends, new-grad hiring markets, residency programs, and starting salaries",
+    "Scope-of-practice legislation, nurse staffing ratios, and state board of nursing policy changes",
+    "Student loan policy, nursing scholarships, tuition assistance programs, and financial aid news",
+    "Mental health, burnout prevention, and wellness resources specific to nursing students and new grads",
+    "Healthcare technology entering clinical settings that students will encounter on rotations (EHRs, telehealth, AI-assisted diagnostics)"
+  ],
+  "out_scope": [
+    "Advanced practice / NP or CRNA-level clinical content (wrong career stage)",
+    "Hospital administration, healthcare finance, or C-suite strategy",
+    "Physician or medical school news and MD licensing",
+    "Deep research methodology or academic nursing theory with no clinical application",
+    "Consumer health and patient-facing wellness content"
+  ],
+  "sources": [
+    "ncsbn.org",
+    "nursingworld.org",
+    "journals.lww.com",
+    "ajnoffline.com",
+    "nursingcenter.com",
+    "minoritynurse.com",
+    "nurse.com",
+    "modernhealthcare.com",
+    "healthaffairs.org",
+    "statnews.com",
+    "beckershospitalreview.com",
+    "aannet.org",
+    "acen.org",
+    "hrsa.gov",
+    "cdc.gov"
+  ],
+  "feeds": [
+    "https://www.statnews.com/feed/",
+    "https://www.modernhealthcare.com/rss/news.rss",
+    "https://www.beckershospitalreview.com/rss/rssfeeds/nursing.xml",
+    "https://www.healthaffairs.org/rss/site_3/41.xml",
+    "https://minoritynurse.com/feed/",
+    "https://www.nurse.com/blog/feed/",
+    "https://www.cdc.gov/rss/all.xml"
+  ],
+  "relevance_gate": "Would a nursing student in their final two years of school change how they study, prepare for clinicals, or plan their job search after reading this?",
+  "tracks": [
+    {
+      "name": "NCLEX & Boards",
+      "desc": "Next Generation NCLEX updates, passing-standard changes, test-taking strategy research, and NCSBN policy announcements"
+    },
+    {
+      "name": "Clinical Practice",
+      "desc": "Evidence-based guideline updates, patient safety alerts, new clinical protocols, and skills that students will encounter on rotations"
+    },
+    {
+      "name": "Workforce & Hiring",
+      "desc": "New-grad job market data, nursing residency program news, staffing ratio legislation, and salary benchmarks by specialty and region"
+    },
+    {
+      "name": "School & Accreditation",
+      "desc": "Nursing program accreditation changes, curriculum innovations, simulation and virtual-reality learning, and school ranking news"
+    },
+    {
+      "name": "Policy & Scope",
+      "desc": "State board of nursing rulings, scope-of-practice expansions, federal nursing workforce legislation, and Magnet/staffing mandates"
+    },
+    {
+      "name": "Student Life & Wellness",
+      "desc": "Financial aid, scholarships, loan forgiveness updates, burnout research, and mental health resources tailored to nursing students"
+    }
+  ],
+  "geography": "US-first",
+  "self_coverage": null,
+  "tone": "Warm but direct, peer-to-peer encouragement without condescension — like advice from a sharp second-year student who actually reads the policy memos.",
+  "theme": {
+    "bg_dark": "#0F2D3D",
+    "primary": "#0E9E8E",
+    "accent": "#4DD9C8",
+    "ink": "#16181D"
+  }
+}

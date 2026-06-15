@@ -1,0 +1,642 @@
+"""Claude tool-use loop that generates a newsletter's structured content.
+
+The loop:
+1. Sends the newsletter prompt + run context to Claude.
+2. Claude calls tools (web_search [server-side], web_fetch, og_image_check)
+   until it has enough to assemble the content.
+3. Returns a structured payload Claude emits as its final assistant turn.
+
+Web search is Anthropic's server-side `web_search_20250305` tool — runs on
+Anthropic's infrastructure, no client-side execution needed. Source quality is
+enforced at the search layer: if the newsletter has a curated source list
+(get_sources), the tool runs with an `allowed_domains` ALLOWLIST (only vetted
+outlets can be returned); otherwise it falls back to the `blocked_domains`
+blocklist. See build_tool_schemas. Replaced the custom Brave wrapper on
+2026-05-26 to drop the BRAVE_SEARCH_API_KEY dependency.
+
+The expected final-output shape (Claude is instructed to produce this JSON):
+    {
+      "top3": [{
+          "headline": "...",
+          "summary": "...",
+          "track": "...",
+          "filed_time": "07:42 CT",
+          "dateline": "Cupertino · Brussels",
+          "hero_image_url": "https://..." | null,
+          "source_url": "https://...",
+          "implications": ["...", "..."]  # 2 bullets
+      }, ...],
+      "watchlist": [{"tag": "Filing", "headline": "...", "source": "..."}, ...],
+      "also_noted": [{"headline": "...", "source": "..."}, ...],
+      "anomalies": ["any operational notes worth surfacing", ...]
+    }
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+from typing import Any
+from urllib.parse import urlparse
+
+import anthropic
+
+from .tools import web_fetch, og_image, feeds as feed_ingest
+from .compact_prompts import make_compact_prompt, get_sources, get_feeds
+
+# Source-quality blocklist for the server-side web_search tool. Press-release
+# wires (prnewswire, businesswire, etc.) and low-signal aggregators (msn.com,
+# yahoo.com syndication, headtopics) are the main source of fabrication-tempting
+# "Vendor X announces Y" stories without external signal. Anthropic's web_search
+# accepts these as `blocked_domains` and never returns results from them.
+# Migrated from the old scripts/tools/web_search.py BLOCKED_DOMAINS set.
+# Note: path-based blocks (e.g. marketwatch.com/press-release) aren't supported
+# by Anthropic web_search — domain-only entries here.
+WEB_SEARCH_BLOCKED_DOMAINS = [
+    # Press-release wires
+    "prnewswire.com",
+    "businesswire.com",
+    "globenewswire.com",
+    "newswire.com",
+    "prweb.com",
+    "einpresswire.com",
+    "yahoo.com",        # generic syndication — re-search the original outlet
+    # Low-signal aggregators
+    "msn.com",
+    "headtopics.com",
+    "newsbreak.com",
+    "smartcompany.com.au",
+]
+
+# Model choice:
+# - Agent uses Sonnet 4.6. Tried Haiku first — it hallucinated product names
+#   ("Antigravity 2.0", "Gemini 3.5 Flash", unverified subscriber counts).
+#   Newsletters need zero fabrication, so the cost/speed savings aren't worth
+#   the editorial risk. Sonnet's fact discipline is much better.
+# - Upgraded 4.5 → 4.6 on 2026-05-27 per Anthropic cookbook reference. Unlocks
+#   web_search_20260209 (dynamic source filtering) at same per-token price.
+# - Sr. Editor (sr_editor.py) also Sonnet — single call per run, low TPM cost.
+AGENT_MODEL = "claude-sonnet-4-6"
+MAX_AGENT_TURNS = 25  # was 40; tightened to fit workflow timeout
+
+# Pacing for Tier 1 TPM (30K input/min on Sonnet). With our compact prompt +
+# accumulating message history, each turn is ~5-12K input tokens.
+# 12-sec sleep keeps cumulative input under 30K/min in steady state.
+SLEEP_BETWEEN_TURNS_SEC = 12
+SDK_MAX_RETRIES = 6
+# Cap per-turn output. Sonnet rarely uses >2K tokens for tool-use turns;
+# 4096 is plenty and cuts ~5-15 sec of generation time per turn vs 8192.
+MAX_RESPONSE_TOKENS = 8192  # payloads with source_excerpt across 3 stories can be large; 8192 avoids mid-serialization truncation
+
+# Tier-1 baseline allowlist — broad-coverage outlets unioned into EVERY audience's
+# allowlist (in build_tool_schemas) so a genuinely consequential story isn't missed
+# just because it broke on a general wire outside the audience's niche source list.
+#
+# CRITICAL crawler constraint (learned live, 2026-06-07): Anthropic's web_search
+# user agent CANNOT read many paywalled papers of record — NYT, WSJ, FT, Reuters,
+# AP, The Economist, Wired, Ars Technica, The Verge all block it. With an
+# ALLOWLIST, naming an inaccessible domain 400s the WHOLE request
+# (invalid_request_error: "not accessible to our user agent"). So this baseline is
+# intentionally small (only domains confirmed crawler-accessible), and run_agent
+# self-heals by pruning any audience source the crawler can't reach (see
+# _parse_inaccessible_domains). Don't re-add majors here without confirming they
+# return a 200 on a live allowlist run.
+# Confirmed crawler-accessible on a live allowlist run (2026-06-07). Kept small
+# on purpose — most papers of record block the crawler. NOTE: theguardian.com is
+# NOT here despite being a paper of record — it blocks the Anthropic crawler too
+# (confirmed pruned live). Its free content is reachable only via the Guardian
+# Open Platform API, which would be a separate client-side source tool (parked).
+TIER1_BASELINE_DOMAINS = [
+    "bloomberg.com",
+    "axios.com",
+    "cnbc.com",
+]
+
+
+_INACCESSIBLE_DOMAINS_RE = re.compile(r"not accessible to our user agent:\s*\[([^\]]*)\]")
+
+
+def _parse_inaccessible_domains(message: str) -> list[str]:
+    """Extract the domains named in a web_search allowlist 400, normalized.
+
+    The API rejects an allowlist that contains any domain its crawler can't read,
+    listing them all: "...not accessible to our user agent: ['ft.com','wsj.com']".
+    Returns [] if the message isn't that error."""
+    m = _INACCESSIBLE_DOMAINS_RE.search(message or "")
+    if not m:
+        return []
+    return [_normalize_domain(p.strip().strip("'\"")) for p in m.group(1).split(",") if p.strip()]
+
+
+def _normalize_domain(raw: str) -> str:
+    """Coerce a source entry to the bare form Anthropic web_search expects:
+    no scheme, no leading 'www.', no trailing slash. Subpaths are left intact
+    (the tool supports them). Defensive against spec entries like
+    'https://www.example.com/' that would otherwise 400 (invalid_tool_input)."""
+    s = (raw or "").strip().lower()
+    if "://" in s:
+        s = s.split("://", 1)[1]
+    s = s.rstrip("/")
+    if s.startswith("www."):
+        s = s[4:]
+    return s
+
+
+def _normalize_domains(domains: list[str]) -> list[str]:
+    """Normalize, dedupe, and sort a domain list. Sorting keeps the rendered tool
+    schema byte-stable within a run so the cached tools+system prefix holds."""
+    out: set[str] = set()
+    for d in domains:
+        nd = _normalize_domain(d)
+        if nd:
+            out.add(nd)
+    return sorted(out)
+
+
+# Static (non-web_search) tools. web_search is constructed per-run by
+# build_tool_schemas() so its domain filter (allowlist vs blocklist) can vary by
+# newsletter. cache_control still lands on the last tool (submit_newsletter),
+# anchoring a cached [tools + static brief] prefix across the agent loop.
+_STATIC_TOOL_SCHEMAS = [
+    {
+        "name": "web_fetch",
+        "description": (
+            "Fetch an article URL and extract its readable body and og:image. "
+            "Use this to verify story facts before writing the summary, and to "
+            "get the candidate hero image URL. "
+            "The response includes `published_at` — ALWAYS check this against "
+            "EARLIEST_ACCEPTABLE_DATE from your run context. If the article is "
+            "older than that, REJECT it and find a fresher source. Stale news "
+            "framed as current is the #1 failure mode."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The article URL to fetch."},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "og_image_check",
+        "description": (
+            "Vision-check whether an image is relevant to a story headline. "
+            "Returns 'approve', 'reject', or 'skip' (image too large or "
+            "unfetchable). Use this on the og_image_url from web_fetch BEFORE "
+            "including the image in the final payload."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "image_url": {"type": "string"},
+                "headline": {"type": "string"},
+                "track": {"type": "string"},
+                "image_size_bytes": {"type": "integer", "description": "From web_fetch.og_image_size_bytes if known."},
+            },
+            "required": ["image_url", "headline"],
+        },
+    },
+    {
+        "name": "submit_newsletter",
+        "description": (
+            "Submit the final structured newsletter payload. Call this ONCE "
+            "when you've assembled the Top Stories + Other News items. "
+            "This ends the agent loop."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "top_stories": {
+                    "type": "array",
+                    "description": (
+                        "1 to 3 Top stories. First is Big Signal (most consequential). "
+                        "Each gets full treatment. NEVER pad — ship 1 or 2 if news is thin. "
+                        "Cap is 3, floor is 1."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "headline": {"type": "string"},
+                            "summary": {"type": "string", "description": "1-2 sentences, ≤ 35 words. Every claim must trace to source."},
+                            "track": {"type": "string"},
+                            "published_at": {
+                                "type": ["string", "null"],
+                                "description": (
+                                    "Pass through the `published_at` value web_fetch returned for the source article, "
+                                    "verbatim. DO NOT reformat — the renderer parses it and converts to CT for display. "
+                                    "If web_fetch didn't return a published_at, set null. Never invent or guess a "
+                                    "publish time."
+                                ),
+                            },
+                            "dateline": {"type": "string", "description": "Where the news happened, e.g. 'Cupertino · Brussels'"},
+                            "hero_image_url": {"type": ["string", "null"]},
+                            "source_url": {"type": "string"},
+                            "source_excerpt": {
+                                "type": "string",
+                                "description": (
+                                    "2-4 verbatim sentences from the source article that contain the key facts your summary and implications "
+                                    "are based on. Quote directly — do not paraphrase. The Sr. Editor verifies every claim in summary + "
+                                    "implications against this excerpt, so include the passage(s) that support your strongest claims (numbers, "
+                                    "named entities, legal framing, quotes). If a claim isn't supported by anything you can quote, drop it before "
+                                    "submitting. This field is what lets the editor stop flagging valid claims as fabricated."
+                                ),
+                            },
+                            "implications": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Exactly 2 bullets. 8-14 words each. Concrete strategic moves for the audience."
+                            },
+                        },
+                        "required": ["headline", "summary", "track", "published_at", "dateline", "source_url", "source_excerpt", "implications"],
+                    },
+                    "minItems": 1,
+                    "maxItems": 3,
+                },
+                "other_news": {
+                    "type": "array",
+                    "description": "0 to 5 scan-only items. Each: track tag + headline + subtitle + source URL. NO summary, NO implications, NO hero. These are skim items — headline+subtitle must do all the work.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "track": {"type": "string", "description": "One of the newsletter's tracks (e.g. App Stores, Developers, Apps)"},
+                            "headline": {"type": "string", "description": "Sentence case, 6-10 words, no colons"},
+                            "subtitle": {"type": "string", "description": "One-line dek that adds context. ≤ 14 words. This is the only post-headline context."},
+                            "published_at": {
+                                "type": ["string", "null"],
+                                "description": (
+                                    "Pass through web_fetch's published_at for this item, verbatim; null if unknown. "
+                                    "Other News obeys the SAME freshness gate as Top Stories — items published before "
+                                    "EARLIEST_ACCEPTABLE_DATE are dropped. Never invent or guess a date."
+                                ),
+                            },
+                            "source_url": {"type": "string", "description": "The article URL (for hyperlinking the headline)"},
+                        },
+                        "required": ["track", "headline", "subtitle", "source_url"],
+                    },
+                    "maxItems": 5,
+                },
+                "anomalies": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Operational notes — image omissions, blocked URLs, thin news day, etc.",
+                },
+            },
+            "required": ["top_stories"],
+        },
+        # Cache_control on the last tool cascades back through all preceding
+        # tools, capturing the ~1.5K tokens of static tool schemas + the
+        # web_search domain filter. Combined with the system-block cache
+        # (static_brief), this caches everything up to the dynamic context.
+        "cache_control": {"type": "ephemeral"},
+    },
+]
+
+
+def build_tool_schemas(allowed_domains: list[str] | None = None) -> list[dict[str, Any]]:
+    """Assemble the agent's tool list for one run.
+
+    web_search uses an ALLOWLIST when `allowed_domains` is non-empty — only those
+    domains can ever be returned (the strong source-quality lever). Otherwise it
+    falls back to the legacy `blocked_domains` filter. The two are mutually
+    exclusive per the API, so the allowlist subsumes the blocklist: press-release
+    wires and aggregators simply aren't on it. Domains are normalized + sorted for
+    a byte-stable cached prefix.
+    """
+    web_search: dict[str, Any] = {
+        "type": "web_search_20250305",
+        "name": "web_search",
+        "max_uses": 10,
+    }
+    norm = _normalize_domains(allowed_domains) if allowed_domains else []
+    if norm:
+        web_search["allowed_domains"] = norm
+    else:
+        web_search["blocked_domains"] = WEB_SEARCH_BLOCKED_DOMAINS
+    return [web_search] + _STATIC_TOOL_SCHEMAS
+
+
+def run_agent(
+    *,
+    newsletter: str,
+    prompt_text: str,
+    state: dict[str, Any],
+    today_date_iso: str,
+    issue_number: int,
+    editor_must_fix: list[str] | None = None,
+) -> dict[str, Any]:
+    """Run the newsletter-generation agent loop. Returns the payload submitted
+    via the submit_newsletter tool.
+
+    Raises RuntimeError if the agent fails to submit within MAX_AGENT_TURNS.
+    """
+    client = anthropic.Anthropic(
+        api_key=os.environ["ANTHROPIC_API_KEY"],
+        max_retries=SDK_MAX_RETRIES,
+    )
+
+    # Split system into two blocks so the static brief (~2K tokens) caches
+    # across all 25 turns of the agent loop. Render order is tools → system,
+    # so cache_control on the first system block anchors a cached prefix of
+    # [tools + static brief]. The dynamic context (~150 tokens, with today's
+    # date / state / editor concerns) comes after — varies per request but
+    # doesn't invalidate the cache.
+    #
+    # Cost math at Sonnet 4.5 ($3/M input): old = ~$0.09/run on the brief
+    # (2K tokens × 15 turns × $3/M). New = ~$0.016/run (1 write @ 1.25x +
+    # ~14 reads @ 0.1x). Savings ~$0.07/run = ~$1.80/mo at 6 runs/week.
+    static_brief = make_compact_prompt(newsletter)
+    dynamic_context = _build_dynamic_context(state, today_date_iso, issue_number, editor_must_fix)
+
+    # Resolve the per-audience source allowlist (sources + tier-1 baseline). If a
+    # newsletter has no curated sources, allowed_domains is None and build_tool_schemas
+    # falls back to the legacy blocklist — nothing regresses.
+    audience_sources = get_sources(newsletter)
+    allowed_domains = (audience_sources + TIER1_BASELINE_DOMAINS) if audience_sources else None
+    tool_schemas = build_tool_schemas(allowed_domains)
+    if allowed_domains:
+        n = len(tool_schemas[0].get("allowed_domains", []))
+        print(f"[agent_loop] web_search ALLOWLIST: {n} domains ({len(audience_sources)} audience + tier-1 baseline)")
+    else:
+        print(f"[agent_loop] web_search BLOCKLIST fallback ({len(WEB_SEARCH_BLOCKED_DOMAINS)} blocked) — no sources for '{newsletter}'")
+
+    # Multi-source ingestion: pre-fetch fresh candidates from the audience's curated
+    # feeds (client-side — reaches outlets web_search can't crawl; web_fetch reads them).
+    # Injected as LEADS into the opening message; the agent must web_fetch to verify.
+    # Robust: dead feeds are skipped, never abort the run.
+    from datetime import date as _fdate, timedelta as _ftimedelta
+    _feed_earliest = _fdate.fromisoformat(today_date_iso) - _ftimedelta(days=3)
+    feed_block = ""
+    feed_urls = get_feeds(newsletter)
+    if feed_urls:
+        try:
+            candidates, feed_warnings = feed_ingest.fetch_feed_candidates(
+                feed_urls, _feed_earliest, limit=25)
+            print(f"[agent_loop] feed candidates: {len(candidates)} from {len(feed_urls)} feeds "
+                  f"({len(feed_warnings)} skipped)")
+            for _w in feed_warnings:
+                print(f"[agent_loop]   feed skip: {_w}")
+            # AI-rank the pool by relevance (cheap Haiku call); keep the best.
+            # Recency alone surfaces off-topic-but-fresh items; ranking fixes that.
+            if candidates:
+                from .candidate_ranker import rank_candidates
+                candidates = rank_candidates(candidates, static_brief, top_k=12, client=client)
+                _scores = [c["rank_score"] for c in candidates if isinstance(c.get("rank_score"), int)]
+                if _scores:
+                    print(f"[agent_loop] ranked feed candidates → top {len(candidates)} "
+                          f"(scores {min(_scores)}..{max(_scores)})")
+            feed_block = _build_feed_block(candidates)
+        except Exception as _e:  # noqa: BLE001 — ingestion must never block a run
+            print(f"[agent_loop] feed ingestion failed (continuing web_search-only): {type(_e).__name__}: {_e}")
+
+    system_blocks = [
+        {
+            "type": "text",
+            "text": static_brief,
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "type": "text",
+            "text": dynamic_context,
+        },
+    ]
+
+    messages: list[dict[str, Any]] = [
+        {
+            "role": "user",
+            "content": (
+                f"Generate today's newsletter issue. The brief is in the system message above. "
+                f"Today: {today_date_iso}. Issue number to assign: {issue_number}. "
+                f"Last run: {state.get('last_run_at', 'never')}. "
+                f"\n\nResearch news across the use-case tracks, then assemble the Top Stories + Other News, "
+                f"then call submit_newsletter ONCE with the complete payload."
+                + feed_block
+            ),
+        }
+    ]
+
+    final_payload: dict[str, Any] | None = None
+
+    def _create_response():
+        """messages.create with self-healing allowlist pruning. If web_search
+        rejects the request because some allowed_domains aren't crawler-accessible,
+        drop exactly those (the error names them), rebuild tool_schemas, and retry.
+        An empty allowlist after pruning falls back to the blocklist."""
+        nonlocal tool_schemas, allowed_domains
+        for _ in range(4):
+            try:
+                return client.messages.create(
+                    model=AGENT_MODEL,
+                    max_tokens=MAX_RESPONSE_TOKENS,
+                    system=system_blocks,
+                    tools=tool_schemas,
+                    messages=messages,
+                    # Low temperature for factual zero-fabrication content. Matches the
+                    # Anthropic cookbook reference (patterns/agents/util.py) and reduces
+                    # variance run-to-run, which makes A/B comparison of fixes possible.
+                    temperature=0.1,
+                )
+            except anthropic.BadRequestError as e:
+                bad = set(_parse_inaccessible_domains(getattr(e, "message", "") or str(e)))
+                if not bad or not allowed_domains:
+                    raise
+                kept = [d for d in allowed_domains if _normalize_domain(d) not in bad]
+                dropped = sorted(set(_normalize_domains(allowed_domains)) - set(_normalize_domains(kept)))
+                print(f"[agent_loop] web_search: dropped {len(dropped)} crawler-inaccessible domain(s) "
+                      f"from allowlist: {dropped}")
+                allowed_domains = kept or None
+                tool_schemas = build_tool_schemas(allowed_domains)
+                if not allowed_domains:
+                    print("[agent_loop] web_search: allowlist empty after pruning — falling back to blocklist")
+        raise RuntimeError("web_search allowlist still rejected after pruning inaccessible domains")
+
+    for turn in range(MAX_AGENT_TURNS):
+        if turn > 0:
+            # Pace requests to stay under Tier 1 TPM
+            time.sleep(SLEEP_BETWEEN_TURNS_SEC)
+        response = _create_response()
+
+        # Build assistant message from response.content (multiple blocks possible)
+        assistant_content = []
+        for block in response.content:
+            assistant_content.append(block.model_dump())
+        messages.append({"role": "assistant", "content": assistant_content})
+
+        # Find tool uses
+        tool_uses = [b for b in response.content if b.type == "tool_use"]
+        if not tool_uses:
+            # No tool calls and no submit. Likely model gave up — break with error.
+            break
+
+        # Execute tools, build tool_result blocks
+        tool_results = []
+        for tu in tool_uses:
+            name = tu.name
+            tu_id = tu.id
+            tinput = tu.input
+            try:
+                result = _execute_tool(name, tinput, newsletter)
+                if name == "submit_newsletter":
+                    final_payload = result
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tu_id,
+                        "content": "Submitted.",
+                    })
+                else:
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tu_id,
+                        "content": json.dumps(result, ensure_ascii=False)[:8000],  # cap per-tool output (Tier 1 TPM safety)
+                    })
+            except Exception as e:  # noqa: BLE001 — surface tool errors to the model
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tu_id,
+                    "is_error": True,
+                    "content": f"Tool '{name}' raised: {type(e).__name__}: {e}",
+                })
+
+        messages.append({"role": "user", "content": tool_results})
+
+        if final_payload is not None:
+            return final_payload
+
+    raise RuntimeError(f"Agent did not submit a payload within {MAX_AGENT_TURNS} turns.")
+
+
+def _build_dynamic_context(
+    state: dict[str, Any],
+    today_date_iso: str,
+    issue_number: int,
+    editor_must_fix: list[str] | None,
+) -> str:
+    """Per-request system context that comes AFTER the cached static brief.
+
+    Contains today's date, freshness cutoff, issue number, last-run state, and
+    any editor must-fix items from a prior failed draft. This block varies per
+    request — it's intentionally placed after the cache_control breakpoint so
+    the static brief (~2K tokens) stays cached across the full agent loop.
+    """
+    from datetime import datetime, timedelta
+    today_dt = datetime.fromisoformat(today_date_iso)
+    earliest_acceptable_date = (today_dt - timedelta(days=3)).strftime("%Y-%m-%d")
+    parts = [
+        "## Today's run context",
+        f"- TODAY: {today_date_iso}",
+        f"- EARLIEST_ACCEPTABLE_DATE: {earliest_acceptable_date}",
+        f"  (Reject any source article published before this date. Stale news",
+        f"  is the most common failure mode — verify published_at on every",
+        f"  web_fetch result before including the story.)",
+        f"- Issue number to assign: {issue_number}",
+        f"- Time window for fresh news: from {state.get('last_run_at','never')} through now.",
+        f"- Last feedback check: {state.get('last_feedback_check_at','never')}",
+    ]
+    if editor_must_fix:
+        parts.extend([
+            "",
+            "## ⚠ Previous draft REJECTED by Sr. Editor — fix these:",
+        ])
+        for fix in editor_must_fix:
+            parts.append(f"- {fix}")
+        parts.append("")
+        parts.append("Regenerate the draft addressing every fix above, then call submit_newsletter.")
+    return "\n".join(parts)
+
+
+def _build_feed_block(candidates: list[dict[str, Any]]) -> str:
+    """Render pre-fetched feed candidates as an opening-message block (empty if none).
+
+    The candidates are LEADS, not citations — the prompt is explicit that the agent
+    must web_fetch each before using it, so this never short-circuits fact discipline."""
+    if not candidates:
+        return ""
+    ranked = any(isinstance(c.get("rank_score"), int) for c in candidates)
+    intro = (
+        "LEADS pulled from your curated RSS feeds, then scored 0-100 for relevance to THIS "
+        "audience (highest first) — prioritise the top-scored. "
+        if ranked else
+        "LEADS pulled from your curated RSS feeds (freshness-filtered). "
+    )
+    lines = [
+        "\n\n## Fresh candidates from your trusted feeds",
+        intro
+        + "They are NOT verified — web_fetch each one you intend to use to confirm the facts, "
+        "the published_at date, and to pull the source_excerpt. Do NOT cite from the feed line "
+        "alone. web_search is still available to supplement (not replace) these.",
+        "",
+    ]
+    for c in candidates:
+        d = c.get("published_date")
+        date_str = d.isoformat() if d else "date?"
+        score = c.get("rank_score")
+        prefix = f"[{score:>3}] " if isinstance(score, int) else ""
+        reason = f"  — {c['rank_reason']}" if c.get("rank_reason") else ""
+        lines.append(f"- {prefix}{c['title']} — {c['source_domain']} · {date_str} · {c['url']}{reason}")
+    return "\n".join(lines)
+
+
+def _execute_tool(name: str, tinput: dict[str, Any], newsletter: str) -> Any:
+    # web_search is server-side now — Anthropic handles invocation and we never
+    # see a tool_use block for it. Only client-side tools below.
+    if name == "web_fetch":
+        url = tinput["url"]
+        # Log every fetch attempt with its domain. Lets us see which outlets the
+        # agent actually reads — and spot feed-only / web_search-blocked domains
+        # (e.g. theverge.com) being recovered via the RSS-ingestion path.
+        host = urlparse(url).netloc.lower()
+        host = host[4:] if host.startswith("www.") else host
+        print(f"[agent_loop]   web_fetch → {host}  {url[:90]}")
+        return web_fetch.fetch(url)
+    if name == "og_image_check":
+        verdict = og_image.check_image_relevance(
+            tinput["image_url"],
+            tinput["headline"],
+            track=tinput.get("track", ""),
+            image_size_bytes=tinput.get("image_size_bytes"),
+        )
+        if verdict is True:
+            return {"verdict": "approve"}
+        if verdict is False:
+            return {"verdict": "reject"}
+        return {"verdict": "skip", "reason": "image too large, unfetchable, or vision check failed"}
+    if name == "submit_newsletter":
+        # Defensive: under complex schemas the model occasionally serializes
+        # array fields as JSON strings instead of native arrays. Worse, the
+        # serialized content can contain unescaped quotes from source_excerpt
+        # (verbatim article text that includes "quoted phrases"), making the
+        # string itself malformed JSON. Two-stage repair: standard json.loads,
+        # then fall back to json-repair (handles unescaped quotes, trailing
+        # commas, mixed quote styles, and other LLM serialization quirks).
+        import sys as _sys
+        from json_repair import repair_json as _repair_json
+        payload = dict(tinput)  # shallow copy
+        for k in ("top_stories", "other_news", "anomalies"):
+            v = payload.get(k)
+            if isinstance(v, str):
+                try:
+                    payload[k] = json.loads(v)
+                    print(f"[agent_loop] WARN: '{k}' arrived as JSON string from model — auto-parsed.", file=_sys.stderr)
+                    continue
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                # Strict parse failed — try json-repair (tolerant parser)
+                try:
+                    repaired = _repair_json(v, return_objects=True)
+                    if isinstance(repaired, list):
+                        payload[k] = repaired
+                        print(f"[agent_loop] WARN: '{k}' was malformed JSON string ({len(v)} chars) — repaired via json-repair.", file=_sys.stderr)
+                        continue
+                except Exception as e:  # noqa: BLE001
+                    print(f"[agent_loop] WARN: json-repair also failed for '{k}': {e}", file=_sys.stderr)
+                # Both parsers failed — log diagnostic and leave as-is so
+                # downstream surfaces a clear error rather than silently passing.
+                head = v[:400].replace("\n", "\\n")
+                tail = v[-200:].replace("\n", "\\n") if len(v) > 400 else ""
+                print(f"[agent_loop] WARN: '{k}' is a string ({len(v)} chars), strict + repair both failed; leaving as-is.", file=_sys.stderr)
+                print(f"[agent_loop]   head: {head}", file=_sys.stderr)
+                if tail:
+                    print(f"[agent_loop]   tail: ...{tail}", file=_sys.stderr)
+        return payload
+    raise ValueError(f"Unknown tool: {name}")

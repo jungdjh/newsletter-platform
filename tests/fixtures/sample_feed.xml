@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Sample Feed</title>
+    <link>https://www.theverge.com</link>
+    <description>Test fixture</description>
+    <item>
+      <title>Alpha launches model</title>
+      <link>https://www.theverge.com/alpha</link>
+      <description>&lt;p&gt;Alpha &lt;b&gt;ships&lt;/b&gt; a new model today.&lt;/p&gt;</description>
+      <pubDate>Sat, 06 Jun 2026 10:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Beta old news</title>
+      <link>https://techcrunch.com/beta</link>
+      <description>Stale story from January.</description>
+      <pubDate>Thu, 01 Jan 2026 10:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Gamma no date</title>
+      <link>https://techcrunch.com/gamma</link>
+      <description>No pubDate on this one.</description>
+    </item>
+    <item>
+      <title>Alpha launches model (syndicated copy)</title>
+      <link>https://www.theverge.com/alpha/</link>
+      <description>Duplicate URL (trailing slash).</description>
+      <pubDate>Sat, 06 Jun 2026 11:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>Alpha launches model</title>
+      <link>https://other.com/alpha-syndicated</link>
+      <description>Duplicate title, different URL.</description>
+      <pubDate>Sat, 06 Jun 2026 09:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>
