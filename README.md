@@ -23,10 +23,13 @@ every claim against quoted source text**, and renders an Outlook-safe email — 
   <br><em>A generated issue for "AI PMs" — fact-checked, themed, and rendered as email.</em>
 </p>
 
-**▶ Open the live, scrollable samples:**
+**▶ Try the live, interactive demo:** **[jungdjh.github.io/newsletter-platform](https://jungdjh.github.io/newsletter-platform/)**
+_Pick an audience → watch a brief generate → approve each story before it sends._
+
+Or open the static samples:
 📄 [Rendered newsletter](https://jungdjh.github.io/newsletter-platform/sample-ai-pms.html) ·
 🔍 [Fact-check review console](https://jungdjh.github.io/newsletter-platform/sample-review.html)
-&nbsp;·&nbsp; [all samples →](https://jungdjh.github.io/newsletter-platform/)
+&nbsp;·&nbsp; [all samples →](https://jungdjh.github.io/newsletter-platform/samples.html)
 
 ---
 
