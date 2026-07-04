@@ -1,163 +1,61 @@
-# Newsletter Platform
+# Newsletter Studio — an autonomous, human-reviewed AI newsletter system
 
-**Describe an audience in a sentence → get a fact-checked, source-ranked newsletter.**
+**A production system that researches the day's news, drafts a curated issue, fact-checks its own claims, routes it through a human review console, and emails it — on a schedule, unattended.**
 
-_I'm a product manager. I wanted a daily brief without reading ten sites every
-morning, and I didn't trust an LLM not to quietly make things up. So I built the
-fact-checking first and the newsletter around it. Open for anyone with the same
-problem. Not a product, not monetized, no signup. Just the thing I use._
-
-A market-intelligence newsletter engine built on Claude. You give it an audience
-("AI PMs", "nursing students", "cybersecurity practitioners"); it generates a tailored
-editorial brief, sources fresh news from vetted outlets, drafts the issue, **verifies
-every claim against quoted source text**, and renders an Outlook-safe email — with a
-**fact-checking eval harness** that measures whether the verification actually works.
-
-> The interesting part isn't "an LLM writes a newsletter." It's the **trust machinery
-> around it**: claim-level fact verification, a measured eval harness, a curated-source
-> allowlist, and a freshness gate — the things that make automated content shippable
-> instead of plausible-but-wrong.
-
-<p align="center">
-  <img src="docs/demo-ai-pms.gif" alt="A generated AI-PM newsletter — masthead, top stories, and per-claim implications" width="600">
-  <br><em>A generated issue for "AI PMs" — fact-checked, themed, and rendered as email.</em>
-</p>
-
-**▶ Try the live, interactive demo:** **[jungdjh.github.io/newsletter-platform](https://jungdjh.github.io/newsletter-platform/)**
-_Pick an audience → watch a brief generate → approve each story before it sends._
-
-Or open the static samples:
-📄 [Rendered newsletter](https://jungdjh.github.io/newsletter-platform/sample-ai-pms.html) ·
-🔍 [Fact-check review console](https://jungdjh.github.io/newsletter-platform/sample-review.html)
-&nbsp;·&nbsp; [all samples →](https://jungdjh.github.io/newsletter-platform/samples.html)
+▶ **[Live demo](https://jungdjh.github.io/newsletter-platform/)** — watch the pipeline run and read a real issue it produced. Installable as a PWA.
 
 ---
 
-## How it works
+## What it does
 
-```mermaid
-flowchart TD
-    A["Audience description<br/>(one sentence)"] -->|brief_generator| B["Brief spec<br/>tracks · sources · feeds · theme"]
-    B --> C{{"Agent loop (Claude)"}}
-    C -->|"web_search (allowlisted to vetted domains)"| C
-    C -->|"RSS feed ingestion → Haiku relevance ranking"| C
-    C -->|"web_fetch + vision-checked hero images"| C
-    C --> D["Structured draft<br/>(each claim carries a source_excerpt)"]
-    D --> E["Sr. Editor<br/>verify every claim vs source_excerpt"]
-    E --> F["Freshness gate<br/>(drop stale items)"]
-    F --> G["Outlook-safe HTML<br/>+ side-by-side review console"]
+Every run, an agent:
 
-    D -.->|"same component, test mode"| H["Eval harness<br/>planted fabrications → recall / false-positive"]
-```
+1. **Researches** the day's stories across a set of beats (web search + fetch), biased to primary sources.
+2. **Drafts** a ranked issue — a lead "Big Signal" story plus supporting stories, each with a summary, two strategic implications, and a scan list of secondary items.
+3. **Fact-checks itself** — every claim in a summary or implication must be quote-anchored to a verbatim excerpt from the source article; an advisory "Senior Editor" pass flags anything unsupported.
+4. **Hands off to a human** — a side-by-side review console (draft vs. original article) where the reviewer edits, drops, or approves before anything sends.
+5. **Sends** the approved issue via a gated morning job.
 
-The engine is **topic-blind** — what makes it about a given audience is the generated
-brief. `brief_generator` turns an audience description into that brief, so the same
-pipeline serves any vertical.
+The human is the final editor; the agent never sends unreviewed.
 
-| Component | Role |
-|---|---|
-| `scripts/brief_generator.py` | Audience description → structured brief spec (tracks, sources, feeds, tone, theme). The platform core. |
-| `scripts/agent_loop.py` | Claude tool-use loop: research → draft → submit. Owns the web_search allowlist + the self-healing crawler-domain prune. |
-| `scripts/tools/feeds.py` | Client-side RSS ingestion — recovers fresh links from outlets the search crawler can't reach. |
-| `scripts/candidate_ranker.py` | Cheap Haiku pass that scores feed candidates by audience relevance and keeps the best. |
-| `scripts/sr_editor.py` | Second Claude call that fact-checks every claim against its quoted `source_excerpt`. Advisory — the human is the final gate. |
-| `scripts/render_html.py` | Outlook-safe, table-based HTML + plaintext. Per-audience palette derived from the brief's theme. |
-| `scripts/build_review.py` | Local side-by-side review console (our draft vs. the original article). |
-| `tests/evals/` | The fact-checking eval harness. |
+## Engineering worth noting
 
----
+**Agentic research + self-verification.** The draft isn't a single LLM call — it's a tool-using loop (search → fetch → draft → audit) with a structured submission schema. Claims are verified against copied source text, which is what stops the "confident fabrication" failure mode of naive summarizers.
 
-## What makes it trustworthy (the senior signal)
+**Human-in-the-loop review console.** A no-framework web app renders the draft against the original article. The reviewer can edit any field inline, drop a story, or reorder — and what they approve is exactly what sends. Dropping a top story **backfills from a pre-drafted "bench"** of reserve stories (already reviewed as cards), so a rejected story is replaced without a regenerate.
 
-**1. Claim-level fact verification.** Every Top Story carries a `source_excerpt` — verbatim
-sentences from the source. The Sr. Editor verifies each claim in the summary and implications
-against that excerpt; anything not supported gets flagged. This is "show your work" enforced
-in the pipeline.
+**Reliability, treated as a first-class concern.** The send is **at-most-once** (the approval is consumed before the send, so a crash can't double-send). Issue numbers can't be reused or regressed. Scraped URLs are scheme-sanitized (no `javascript:`/`data:` links reach the email). Nightly failures alert instead of failing silently.
 
-**2. A measured eval harness — not vibes.** `tests/evals/` plants known defects into paired
-labeled payloads — a faithful story and a fabricated twin that differ by exactly one planted
-defect (a number changed, an invented quote, an unstated partner, a shifted deadline) — and
-scores the Sr. Editor against ground truth:
+**Content-quality controls.** A Top-N floor guarantees a full lead section (or loudly flags a thin news day rather than shipping a one-story issue). Implications are constrained to reason from the product's *actual* competitive frame. Reserve stories are de-duplicated against the lead set.
+
+**Tested and adversarially reviewed.** ~200 automated tests cover the render, the review/approve logic, the reliability guards, and the content rules. Changes are run through an adversarial "try to break it" review before merge — which has caught real defects (e.g., a null-field crash on a specific render path) pre-ship.
+
+## Architecture (one engine, two faces)
 
 ```
-Fabrication-detection eval — backend=llm, runs=3  (6 paired fixtures)
-Recall (fabrications caught):       18/18 = 100%
-False-positive rate (clean flagged): 0/18 = 0%
+              ┌─────────────────────────────────────────────┐
+   schedule → │  agent loop: research → draft → self-audit   │
+              └───────────────┬─────────────────────────────┘
+                              │ structured issue (+ bench reserves)
+                   ┌──────────▼───────────┐
+                   │  advisory editor pass │  (flags unsupported claims)
+                   └──────────┬───────────┘
+                              │
+                   ┌──────────▼───────────┐        ┌──────────────────┐
+                   │  human review console │◀──────▶│ edit / drop /     │
+                   │  (draft vs. source)   │        │ backfill / approve│
+                   └──────────┬───────────┘        └──────────────────┘
+                              │ approved
+                   ┌──────────▼───────────┐
+                   │  gated at-most-once   │ → email
+                   │  send (idempotent)    │
+                   └──────────────────────┘
 ```
 
-The two axes are in tension: a too-eager editor catches everything but flags clean items
-(the human stops reading the banner); a too-lax one is quiet but misses fabrications. Because
-every fixture is labeled, a prompt change can be **checked for regressions on both axes** instead
-of eyeballed.
+- **Runtime:** Python, stdlib-only web servers (no framework), GitHub Actions for scheduling.
+- **Model:** the agent runs on a single LLM provider with server-side web search; research needs no third-party search key.
+- **Demo:** the same rendering + pipeline, exported to a static PWA for a zero-cost, always-up recruiter view.
 
-```bash
-make evals       # free baseline backend (numeric heuristic floor, no API key)
-make evals-llm   # the real Sr. Editor → writes tests/evals/scorecard.md
-```
+## Why it's interesting as a PM/eng artifact
 
-> Building these fixtures is itself instructive: the editor reviews *holistically* (source
-> quality, vendor-PR, freshness — not just fabrication), so a clean false-positive measurement
-> requires faithful fixtures that are airtight on everything else. That separation of concerns
-> is the kind of thing the harness surfaces.
-
-**3. Sourcing quality at the root, not the filter.** Search is restricted to a per-audience
-**allowlist** of vetted outlets (no press-release wires, no SEO blog farms). Where the search
-crawler can't reach a quality outlet, **RSS ingestion** recovers it client-side, and a cheap
-**relevance ranking** keeps the best candidates — so the writer starts from good inputs.
-
-**4. Freshness discipline.** A cutoff is enforced twice: the writer checks `published_at` on
-every fetch, and the orchestration layer drops stale skim items outright.
-
----
-
-## Quickstart
-
-```bash
-pip install -r requirements.txt
-export ANTHROPIC_API_KEY=sk-ant-...        # bring your own key
-
-# 1. Generate a brief for any audience:
-python -m scripts.brief_generator --audience "indie game developers" --out briefs/indie-devs.json
-
-# 2. Generate + fact-check + render an issue:
-python -m scripts.run_newsletter --newsletter indie-devs --demo --save-html out.html
-
-# Zero-API: re-render a saved payload (great for iterating on the design):
-python -m scripts.run_newsletter --newsletter ai-pms \
-    --from-payload review/ai-pms-ranked.json --skip-editor --demo --save-html out.html
-```
-
-Three example briefs ship in `briefs/`: **AI PMs**, **nursing students**, **cybersecurity
-practitioners**.
-
-```bash
-make test          # full suite, offline, no API key
-make evals         # fabrication-detection eval (free baseline)
-make review        # build the side-by-side review console
-```
-
----
-
-## How it compares
-
-The popular open-source comparable, [`gpt-newspaper`](https://github.com/rotemweiss57/gpt-newspaper)
-(~1.5k★), proves the multi-agent newsletter pattern — but its critique step does **no
-fact-checking**, it ships **no tests**, and it isn't production-shaped. This project is built
-the other way around: **trust first** — claim verification, a measured eval harness, curated
-sourcing, and a tested, replayable pipeline. See
-[`docs/design-decisions.md`](docs/design-decisions.md) for the full comparison and the
-engineering rationale (cost controls, model choices, the delivery architecture).
-
-## Honest limits
-
-- **Sourcing quality scales with niche-breadth.** Broad audiences (AI PMs, nursing students)
-  are well-served by general + trade outlets. *Hyperlocal* audiences (e.g. one school
-  district) need hyperlocal sources that general web search barely covers — that's the
-  frontier, not a solved problem.
-- **Anthropic-only**, by design (this targets the Claude stack).
-- **Generate + render, not deliver.** Email delivery and scheduling are intentionally out of
-  scope here; the production delivery architecture is described in the design-decisions doc.
-
-## License
-
-MIT — see [`LICENSE`](LICENSE).
+It's a full product loop, not a prompt: autonomous generation, a real quality bar (self-verification + a human gate), production reliability guards, and a shippable demo. The interesting decisions were about **trust** — how much to automate, where to force a human, and how to make the automated parts fail safe.

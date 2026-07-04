@@ -1,385 +1,142 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Newsletter Platform · Audience-to-Brief Demo</title>
+<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Newsletter Studio — live demo</title>
+<meta name="theme-color" content="#0f1126">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Studio">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <style>
-  :root{
-    --bg:#0F172A; --panel:#0B1220; --card:#FFFFFF; --page:#F1F5F9;
-    --ink:#1E293B; --muted:#64748B; --line:#E2E8F0;
-    --primary:#4F46E5; --primary-tint:#EEF2FF; --accent:#0D9488; --accent-tint:#ECFDF5;
-    --signal:#1E1B4B; --signal-accent:#818CF8; --warn:#B45309; --warn-bg:#FEF3C7;
-    --ok:#15803D; --ok-bg:#DCFCE7;
-  }
+  :root{--bg:#0f1126;--panel:#171a33;--line:#2a2f52;--ink:#e9eaf5;--mut:#9aa0c7;--accent:#FF2D86;--coral:#FF7A45;--ok:#3ad29f;}
   *{box-sizing:border-box}
-  body{margin:0;background:var(--page);color:var(--ink);
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.5}
-  .wrap{max-width:920px;margin:0 auto;padding:0 18px}
-
-  /* header */
-  header{background:var(--bg);color:#fff;padding:30px 0 26px}
-  .brandrow{display:flex;align-items:center;gap:10px}
-  .dot{width:11px;height:11px;border-radius:50%;background:var(--signal-accent)}
-  .brand{font-weight:800;font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:#C7D2FE}
-  h1{font-family:Georgia,"Times New Roman",serif;font-size:33px;line-height:1.15;margin:14px 0 8px;font-weight:700}
-  h1 .pd{color:var(--signal-accent)}
-  .sub{color:#94A3B8;font-size:15px;max-width:640px}
-  .demotag{display:inline-block;margin-top:14px;font-size:11px;font-weight:700;letter-spacing:.08em;
-    text-transform:uppercase;color:#C7D2FE;border:1px solid #334155;border-radius:999px;padding:5px 11px}
-
-  /* controls */
-  .controls{background:var(--panel);border-bottom:1px solid #1E293B;padding:16px 0}
-  .controls .wrap{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
-  .clabel{color:#94A3B8;font-size:13px;font-weight:600;margin-right:4px}
-  .aud{background:#1E293B;color:#E2E8F0;border:1px solid #334155;border-radius:999px;
-    padding:9px 16px;font-size:13.5px;font-weight:600;cursor:pointer;transition:.15s}
-  .aud:hover{border-color:var(--signal-accent);color:#fff}
-  .aud.active{background:var(--primary);border-color:var(--primary);color:#fff}
-
-  /* generation animation */
-  #gen{display:none;padding:46px 0 60px}
-  #gen.show{display:block}
-  .genbox{max-width:460px;margin:0 auto;text-align:left}
-  .genhead{font-size:14px;color:var(--muted);margin-bottom:18px;text-align:center}
-  .genhead b{color:var(--ink)}
-  .step{display:flex;align-items:center;gap:12px;padding:9px 0;color:#94A3B8;font-size:14.5px;
-    opacity:.4;transition:.25s}
-  .step.on{opacity:1;color:var(--ink)}
-  .step .ic{width:20px;height:20px;border-radius:50%;border:2px solid var(--line);flex:0 0 auto;
-    display:grid;place-items:center;font-size:12px;color:#fff}
-  .step.on .ic{background:var(--accent);border-color:var(--accent)}
-  .step.cur .ic{background:var(--primary);border-color:var(--primary);animation:pulse 1s infinite}
-  @keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.18)}}
-
-  /* brief */
-  #brief{display:none;padding:26px 0 10px}
-  #brief.show{display:block}
-  .issue{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;
-    box-shadow:0 10px 34px rgba(15,23,42,.08)}
-  .ihead{background:var(--signal);color:#fff;padding:20px 26px}
-  .ihead .kick{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:#A5B4FC}
-  .ihead .word{font-family:Georgia,serif;font-size:26px;font-weight:700;margin-top:6px}
-  .ihead .word .pd{color:var(--signal-accent)}
-  .ihead .tl{color:#C7D2FE;font-size:13px;margin-top:5px}
-  .strip{display:flex;justify-content:space-between;align-items:center;
-    padding:11px 26px;background:#F8FAFC;border-bottom:1px solid var(--line);font-size:12.5px;color:var(--muted)}
-  .sample-badge{background:var(--warn-bg);color:var(--warn);font-weight:700;border-radius:6px;padding:3px 8px;font-size:11px}
-  .live-badge{background:var(--ok-bg);color:var(--ok);font-weight:700;border-radius:6px;padding:3px 8px;font-size:11px}
-
-  .editor{margin:18px 26px 0;border:1px solid #FDE68A;background:var(--warn-bg);border-radius:10px;padding:12px 14px}
-  .editor .et{font-weight:800;color:var(--warn);font-size:12.5px;letter-spacing:.04em;text-transform:uppercase}
-  .editor ul{margin:8px 0 0;padding-left:18px}
-  .editor li{font-size:13px;color:#7C2D12;margin:3px 0}
-
-  .toc{margin:18px 26px 4px;padding:13px 16px;background:var(--primary-tint);border-radius:10px}
-  .toc .tt{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--primary);font-weight:700}
-  .toc ol{margin:7px 0 0;padding-left:18px}
-  .toc li{font-size:13.5px;margin:2px 0;color:var(--ink)}
-
-  .body{padding:6px 26px 26px}
-  .story{padding:22px 0;border-bottom:1px solid var(--line)}
-  .story:last-child{border-bottom:0}
-  .big{background:var(--signal);color:#fff;border-radius:14px;padding:22px;margin-top:18px}
-  .numrow{display:flex;align-items:center;gap:12px;margin-bottom:10px}
-  .num{font-family:Georgia,serif;font-size:30px;font-weight:700;line-height:1}
-  .big .num{color:var(--signal-accent)}
-  .story .num{color:var(--primary)}
-  .pills{display:flex;flex-wrap:wrap;gap:6px}
-  .pill{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;border-radius:999px;padding:4px 9px}
-  .pill.signal{background:var(--signal-accent);color:#1E1B4B}
-  .pill.track{background:var(--primary-tint);color:var(--primary)}
-  .big .pill.track{background:#312E81;color:#C7D2FE}
-  .verified{background:var(--ok-bg);color:var(--ok);font-size:10.5px;font-weight:700;border-radius:999px;padding:4px 9px;display:inline-flex;gap:4px;align-items:center}
-  .hl{font-family:Georgia,serif;font-size:21px;font-weight:700;line-height:1.25;margin:6px 0 8px}
-  .summary{font-size:15px;margin:0 0 12px}
-  .big .summary{color:#E0E7FF}
-  .impl{margin:0;padding:0;list-style:none}
-  .impl li{position:relative;padding-left:18px;font-size:13.5px;margin:5px 0}
-  .impl li::before{content:"";position:absolute;left:2px;top:8px;width:6px;height:6px;border-radius:50%;background:var(--accent)}
-  .big .impl li{color:#C7D2FE}.big .impl li::before{background:var(--signal-accent)}
-  .src{margin-top:12px;font-size:12.5px}
-  .src a{color:var(--primary);text-decoration:none;font-weight:600}
-  .big .src a{color:var(--signal-accent)}
-  .src a:hover{text-decoration:underline}
-
-  .also{margin-top:6px}
-  .also .at{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:6px 0 4px}
-  .also .row{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);align-items:baseline}
-  .also .row:last-child{border-bottom:0}
-  .also .tk{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--accent);flex:0 0 86px}
-  .also .hd{font-size:13.5px}
-  .also .hd a{color:var(--muted);text-decoration:none}
-  .also .hd a:hover{color:var(--primary)}
-
-  .ifoot{background:var(--signal);color:#A5B4FC;padding:16px 26px;font-size:12px}
-
-  /* human approval bar (HITL) */
-  .approve{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-top:14px;background:var(--panel);border:1px solid #1E293B;border-radius:14px;padding:15px 18px}
-  .approve.approved{background:var(--ok-bg);border-color:#86EFAC}
-  .amsg{color:#E2E8F0;font-size:14px;font-weight:600}
-  .approve.approved .amsg{color:var(--ok)}
-  .ahint{display:block;font-size:11.5px;font-weight:500;color:#7C8AA0;margin-top:3px}
-  .approve.approved .ahint{color:#15803D}
-  .abtn{background:#34D399;color:#04241A;border:0;border-radius:9px;padding:11px 18px;font-size:14px;font-weight:800;cursor:pointer;white-space:nowrap}
-  .abtn:hover{background:#10B981}
-  .abtn.disabled{background:#334155;color:#94A3B8;cursor:not-allowed}
-  .abtn.disabled:hover{background:#334155}
-  .saction{display:flex;justify-content:flex-end;margin-top:12px}
-  .sapprove{background:transparent;border:1.5px solid var(--accent);color:var(--accent);border-radius:999px;padding:6px 13px;font-size:11.5px;font-weight:800;cursor:pointer;white-space:nowrap}
-  .sapprove:hover{background:var(--accent-tint)}
-  .sapprove.done{background:var(--ok-bg);border-color:#86EFAC;color:var(--ok);cursor:default}
-  .big .sapprove{border-color:var(--signal-accent);color:var(--signal-accent)}
-  .big .sapprove:hover{background:#312E81}
-  .big .sapprove.done{background:#312E81;border-color:var(--signal-accent);color:#C7D2FE}
-
-  /* how it works */
-  .how{background:#fff;border-top:1px solid var(--line);margin-top:34px;padding:30px 0 44px}
-  .how h2{font-size:15px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin:0 0 16px}
-  .flow{display:flex;flex-wrap:wrap;gap:10px}
-  .fstep{flex:1;min-width:150px;background:var(--page);border:1px solid var(--line);border-radius:12px;padding:14px}
-  .fstep .n{font-size:11px;font-weight:800;color:var(--primary)}
-  .fstep .t{font-weight:700;font-size:14px;margin:5px 0 3px}
-  .fstep .d{font-size:12.5px;color:var(--muted)}
-  .claims{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-top:20px}
-  .claim{background:var(--page);border:1px solid var(--line);border-radius:12px;padding:14px 15px;font-size:13px;color:var(--muted)}
-  .claim b{display:block;font-family:Georgia,serif;font-size:22px;color:var(--primary);margin-bottom:4px}
-  footer.foot{padding:22px 0 40px;color:var(--muted);font-size:12px;text-align:center}
-</style>
-</head>
-<body>
-<header>
-  <div class="wrap">
-    <div class="brandrow"><span class="dot"></span><span class="brand">Newsletter Platform</span></div>
-    <h1>Describe an audience. Get a fact-checked, source-ranked brief<span class="pd">.</span></h1>
-    <div class="sub">Pick an audience below and watch a brief generate. Every claim is checked against quoted source text; unsupported ones get flagged, not published.</div>
-    <span class="demotag">Demo · sample output · live version generates in real time</span>
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+  header{padding:22px 28px;padding-top:calc(env(safe-area-inset-top, 0px) + 18px);border-bottom:1px solid var(--line)}
+  h1{margin:0;font-size:19px;letter-spacing:-.01em}
+  h1 span{color:var(--accent)}
+  .sub{color:var(--mut);font-size:13px;margin-top:3px}
+  main{max-width:1080px;margin:0 auto;padding:24px 28px}
+  .form{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .f{display:flex;flex-direction:column;gap:6px}
+  .f.grow{flex:1;min-width:240px}
+  label{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
+  input,select{background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:11px 12px;font-size:15px}
+  button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:12px 22px;font-size:15px;font-weight:700;cursor:pointer}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .modes{display:flex;gap:14px;margin-top:14px;font-size:13px;color:var(--mut)}
+  .modes label{display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-weight:500}
+  /* Single-view "snake" flow: row 1 left->right, row 2 right->left, no side-scroll. */
+  .flow{margin:30px 0 10px}
+  .frow{display:flex;align-items:stretch;gap:0}
+  .frow.r2{flex-direction:row-reverse}
+  .turn{display:flex;justify-content:flex-end;color:var(--mut);font-size:18px;line-height:1;margin:7px 0;padding-right:6.5%}
+  .node{flex:1 1 0;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 14px 12px;position:relative;transition:.2s;opacity:.5;overflow:hidden}
+  .node .num{position:absolute;top:-11px;left:12px;width:22px;height:22px;border-radius:50%;background:var(--line);color:var(--ink);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid var(--bg)}
+  .node.active .num{background:var(--coral);color:#fff}
+  .node.done .num{background:var(--ok);color:#06251a}
+  .node .nl{font-weight:700;font-size:13px}
+  .node .nl{overflow-wrap:anywhere}
+  .node .nd{font-size:11px;color:var(--mut);margin-top:3px;min-height:30px;line-height:1.35;overflow-wrap:anywhere}
+  .node .dot{position:absolute;top:13px;right:12px;width:8px;height:8px;border-radius:50%;background:var(--line)}
+  .node.active{opacity:1;border-color:var(--coral);box-shadow:0 0 0 1px var(--coral),0 6px 20px rgba(255,122,69,.18)}
+  .node.active .dot{background:var(--coral);animation:pulse 1s infinite}
+  .node.done{opacity:1;border-color:var(--ok)}
+  .node.done .dot{background:var(--ok)}
+  .node.error{opacity:1;border-color:#ff6b6b}.node.error .dot{background:#ff6b6b}
+  .node.gate{border-style:dashed}
+  .edge{flex:0 0 28px;align-self:center;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:15px}
+  @media(max-width:760px){.frow{flex-wrap:wrap;gap:12px}.frow.r2{flex-direction:row}.node{flex:1 1 44%}.edge,.turn{display:none}}
+  @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.5}}
+  .result{margin-top:22px;display:none}
+  .result.show{display:block}
+  .cfg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;font-size:13px;color:var(--mut);margin-bottom:14px}
+  .cfg b{color:var(--ink)}
+  iframe{width:100%;height:760px;border:1px solid var(--line);border-radius:12px;background:#fff}
+</style></head><body>
+<header><h1>Newsletter <span>Studio</span></h1><div class="sub">Type an audience &rarr; watch the agent research, draft, fact-check, and render a responsive issue. Live.</div></header>
+<main>
+  <div class="form">
+    <div class="f grow"><label>Audience</label><input id="aud" placeholder="e.g. AI safety researchers, indie game devs, hospital CFOs"></div>
+    <div class="f"><label>Cadence</label><select id="cad"><option>Weekly</option><option>Twice weekly</option><option>Daily</option></select></div>
+    <div class="f grow"><label>Focus (optional)</label><input id="foc" placeholder="e.g. US market, regulation, funding"></div>
+    <button id="go">Generate</button>
+    <button id="stop" style="display:none;background:var(--line);color:var(--ink)">Stop</button>
   </div>
-</header>
-
-<div class="controls">
-  <div class="wrap">
-    <span class="clabel">Pick an audience:</span>
-    <button class="aud" data-aud="aipm">AI Product Managers</button>
-    <button class="aud" data-aud="fintech">Fintech &amp; Payments</button>
-    <button class="aud" data-aud="devtools">Developer Tools</button>
+  <div class="modes">
+    <label><input type="radio" name="mode" value="simulate" checked> Demo (instant — animated pipeline + a real issue, never fails)</label>
+    <label><input type="radio" name="mode" value="live"> Live (real generation, ~1–2 min — proves it works on any subject)</label>
   </div>
-</div>
-
-<div id="gen"><div class="wrap"><div class="genbox">
-  <div class="genhead">Generating brief for <b id="gen-aud">AI Product Managers</b></div>
-  <div class="step" data-s="0"><span class="ic">1</span><span>Searching the last 72 hours of sources</span></div>
-  <div class="step" data-s="1"><span class="ic">2</span><span>Extracting articles, checking publish dates</span></div>
-  <div class="step" data-s="2"><span class="ic">3</span><span>Sr. Editor: verifying each claim against source text</span></div>
-  <div class="step" data-s="3"><span class="ic">4</span><span>Ranking by signal, capping length</span></div>
-</div></div></div>
-
-<div id="brief"><div class="wrap">
-  <div class="issue" id="issue"></div>
-  <div class="approve" id="approvebar">
-    <div><span class="amsg" id="amsg">Review the draft against its sources, then approve. Nothing sends without you.</span>
-      <span class="ahint" id="ahint">Human-in-the-loop: the AI drafts and fact-checks, a person decides.</span></div>
-    <button class="abtn" id="abtn">&#10003; Approve &amp; schedule send</button>
-  </div>
-</div></div>
-
-<div class="how"><div class="wrap">
-  <h2>How it works</h2>
-  <div class="flow">
-    <div class="fstep"><div class="n">01 · RESEARCH</div><div class="t">Agent searches &amp; reads</div><div class="d">Tool-use loop pulls fresh sources, extracts article text, checks publish dates.</div></div>
-    <div class="fstep"><div class="n">02 · DRAFT</div><div class="t">Structured brief</div><div class="d">Stories ranked by signal; summaries and bullets length-capped deterministically.</div></div>
-    <div class="fstep"><div class="n">03 · FACT-CHECK</div><div class="t">Sr. Editor reviews</div><div class="d">A second model checks every claim against quoted source text and flags unsupported ones.</div></div>
-    <div class="fstep"><div class="n">04 · APPROVE</div><div class="t">Human in the loop</div><div class="d">Nothing sends without a person reviewing the draft against the source and approving.</div></div>
-    <div class="fstep"><div class="n">05 · SEND</div><div class="t">Scheduled delivery</div><div class="d">Approved issue renders to email-safe HTML and sends on schedule.</div></div>
-  </div>
-  <div class="claims">
-    <div class="claim"><b>72h</b>freshness gate on every source</div>
-    <div class="claim"><b>40</b>tests, $0 per run, no API calls</div>
-    <div class="claim"><b>1-click</b>human approval before anything ships</div>
-    <div class="claim"><b>eval harness</b>planted fabrications, scored for recall</div>
-  </div>
-</div></div>
-
-<footer class="foot"><div class="wrap">Built by David Jung · sample output for demonstration · the live system generates briefs on demand</div></footer>
-
+  <div id="flow" class="flow"></div>
+  <div id="result" class="result"><div id="cfg" class="cfg"></div><iframe id="frame"></iframe></div>
+</main>
 <script>
-const DATA = {
-  aipm: {
-    label:"AI Product Managers", live:true, no:"014", date:"Thursday, Jun 18, 2026", read:4,
-    toc:["Agentic checkout retreats to the merchant","Google's commerce protocol consolidates the standard","The new cost of a high-intent user"],
-    big:{track:"Agentic Commerce", verified:3,
-      hl:"OpenAI pulls Instant Checkout, retreats to discovery-plus-redirect",
-      summary:"OpenAI wound down native checkout inside ChatGPT after roughly 30 merchants integrated. Walmart saw about one-third the conversion of its own site. Agents now recommend and hand the buyer back to the merchant.",
-      impl:["Agent-as-storefront is unproven on operations: inventory, carts, returns, tax.","Value concentrates in the discovery and routing layer, not the checkout."],
-      src:{n:"CNBC", u:"https://www.cnbc.com/2026/03/24/openai-revamps-shopping-experience-in-chatgpt-after-instant-checkout.html"}},
-    stories:[
-      {track:"Standards", hl:"Google unveils Universal Commerce Protocol at NRF 2026",
-       summary:"Co-developed with Shopify, Etsy, Wayfair and Target. Adds an agent shopping cart, product-catalog access, and identity linking.",
-       impl:["Standards are consolidating around discovery plus merchant redirect.","The merchant keeps the customer relationship and the data."],
-       src:{n:"Digital Commerce 360", u:"https://www.digitalcommerce360.com/2026/04/02/visa-mastercard-in-agentic-commerce/"}},
-      {track:"Economics", hl:"Android install costs climb; the US stays the premium market",
-       summary:"Android CPI averaged about $1.92 in Q1 2026; North America runs near $5 blended. A qualified, intent-routed user is worth more than a cold install.",
-       impl:["Routing a high-intent user can be priced above the install floor.","Geography drives most of the value spread."],
-       src:{n:"Business of Apps", u:"https://www.businessofapps.com/ads/cpi/research/cost-per-install/"}}
-    ],
-    also:[
-      {tk:"Payments", hd:"Mastercard Agent Pay ships Agentic Tokens for verified agents", u:"https://www.mastercard.com/global/en/news-and-trends/stories/2026/agentic-commerce-rules-of-the-road.html"},
-      {tk:"Payments", hd:"Visa Trusted Agent Protocol goes commercial after a 100+ partner sandbox", u:"https://www.digitalcommerce360.com/2026/04/02/visa-mastercard-in-agentic-commerce/"},
-      {tk:"Retail", hd:"Perplexity adds Instant Buy with PayPal across BigCommerce merchants", u:"https://openai.com/index/buy-it-in-chatgpt/"}
-    ],
-    editor:{verdict:"Advisory · 1 item softened", notes:[
-      "Softened one claim: the reported 4% OpenAI merchant fee is trade-reported, not confirmed. Kept the conversion gap and the retreat, which are on the record.",
-      "All dated source URLs verified against the current year. No fabricated dates."]}
-  },
-  fintech: {
-    label:"Fintech &amp; Payments", live:false, no:"008", date:"Thursday, Jun 18, 2026", read:3,
-    toc:["Stablecoin settlement moves to the middle market","Real-time rails cross a usage threshold"],
-    big:{track:"Payments", verified:2,
-      hl:"Stablecoin settlement pilots widen among mid-market processors",
-      summary:"Illustrative sample. Processors outside the top tier begin piloting stablecoin rails for cross-border settlement, citing speed and weekend availability over cost.",
-      impl:["Settlement speed, not fees, is emerging as the headline benefit.","Compliance tooling, not the rail, is the gating factor."],
-      src:{n:"Sample source", u:""}},
-    stories:[
-      {track:"Rails", hl:"Real-time payment volume crosses a usage threshold in the US",
-       summary:"Illustrative sample. Instant-payment adoption reaches a share where merchants begin defaulting to it for payouts.",
-       impl:["Payouts, not checkout, lead real-time adoption.","Fraud controls become the next bottleneck."],
-       src:{n:"Sample source", u:""}}
-    ],
-    also:[
-      {tk:"Regulation", hd:"BNPL disclosure rules enter comment period (illustrative)", u:""},
-      {tk:"Identity", hd:"Bank-grade agent authentication pilots expand (illustrative)", u:""}
-    ],
-    editor:{verdict:"Advisory · illustrative", notes:[
-      "This audience is shown as an illustrative sample, not a live-sourced run.",
-      "In a live run, each claim here would carry a verified source link."]}
-  },
-  devtools: {
-    label:"Developer Tools", live:false, no:"006", date:"Thursday, Jun 18, 2026", read:3,
-    toc:["Coding agents shift from autocomplete to tasks","Observability for LLM apps matures"],
-    big:{track:"AI Tooling", verified:2,
-      hl:"Coding agents move from autocomplete to task execution",
-      summary:"Illustrative sample. Agent tooling shifts from line completion to multi-step task execution with human checkpoints, changing how teams scope work.",
-      impl:["Review and approval surfaces become the product, not the model.","Eval harnesses become table stakes for shipping agents."],
-      src:{n:"Sample source", u:""}},
-    stories:[
-      {track:"Infra", hl:"LLM observability consolidates around trace plus eval",
-       summary:"Illustrative sample. Teams standardize on tracing agent runs and scoring them against fixtures before release.",
-       impl:["Replayable runs reduce cost of iteration.","Fabrication scoring moves into CI."],
-       src:{n:"Sample source", u:""}}
-    ],
-    also:[
-      {tk:"Open Source", hd:"Local model tooling gains attestation features (illustrative)", u:""},
-      {tk:"Security", hd:"Agent action sandboxing patterns standardize (illustrative)", u:""}
-    ],
-    editor:{verdict:"Advisory · illustrative", notes:[
-      "This audience is shown as an illustrative sample, not a live-sourced run.",
-      "In a live run, each claim here would carry a verified source link."]}
-  }
+const NODES = [{"id": "brief", "label": "Brief", "detail": "Configuring for your audience"}, {"id": "research", "label": "Research", "detail": "Searching the web for fresh stories"}, {"id": "read", "label": "Read sources", "detail": "Fetching + reading the articles"}, {"id": "freshness", "label": "Freshness gate", "detail": "Dropping anything stale"}, {"id": "draft", "label": "Draft", "detail": "Writing the issue"}, {"id": "editor", "label": "Sr. Editor", "detail": "Fact-checking every claim against source"}, {"id": "render", "label": "Render", "detail": "Responsive, dark-mode, Outlook-safe email"}, {"id": "done", "label": "Done", "detail": "Ready for your review"}];
+const flow = document.getElementById('flow');
+function paint(states){
+  flow.innerHTML='';
+  const rows=[[0,1,2,3],[4,5,6,7]];
+  rows.forEach((idxs,ri)=>{
+    const rowEl=document.createElement('div');
+    rowEl.className='frow'+(ri===1?' r2':'');
+    idxs.forEach((gi,ci)=>{
+      const n=NODES[gi]; if(!n) return;
+      const st=states[n.id];
+      const el=document.createElement('div');
+      el.className='node'+(n.id==='editor'?' gate':'')+(st?(' '+st.state):'');
+      el.innerHTML='<div class="num">'+(gi+1)+'</div><div class="dot"></div><div class="nl">'+n.label+'</div><div class="nd">'+((st&&st.detail)||n.detail)+'</div>';
+      rowEl.appendChild(el);
+      if(ci<idxs.length-1){const e=document.createElement('div');e.className='edge';e.textContent=(ri===1?'\u2190':'\u2192');rowEl.appendChild(e);}
+    });
+    flow.appendChild(rowEl);
+    if(ri===0){const t=document.createElement('div');t.className='turn';t.textContent='\u2193';flow.appendChild(t);}
+  });
+}
+let states={}; paint(states);
+const goBtn=document.getElementById('go'), stopBtn=document.getElementById('stop');
+let curES=null, curJob=null;
+function setRunning(on){
+  goBtn.disabled=on; goBtn.textContent=on?'Generating…':'Generate';
+  stopBtn.style.display=on?'inline-block':'none';
+}
+function finish(){ if(curES){curES.close();curES=null;} curJob=null; setRunning(false); }
+goBtn.onclick=async()=>{
+  setRunning(true);
+  states={}; paint(states); document.getElementById('result').classList.remove('show');
+  const mode=document.querySelector('input[name=mode]:checked').value;
+  const body={audience:document.getElementById('aud').value,cadence:document.getElementById('cad').value,focus:document.getElementById('foc').value,mode};
+  const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const {job_id}=await r.json(); curJob=job_id;
+  const es=new EventSource('/api/stream/'+job_id); curES=es;
+  es.onmessage=(m)=>{
+    const ev=JSON.parse(m.data);
+    if(ev.type==='result'){
+      const c=ev.config||{};
+      document.getElementById('cfg').innerHTML='Audience: <b>'+(c.audience||'')+'</b> &middot; Cadence: <b>'+(c.cadence||'')+'</b><br>'+(c.note||'');
+      document.getElementById('frame').srcdoc=ev.html;
+      document.getElementById('result').classList.add('show');
+    }else if(ev.type==='end'){
+      finish();
+    }else if(ev.node){
+      const prior=states[ev.node]&&states[ev.node].detail;
+      states[ev.node]={state:ev.state,detail:ev.detail||prior||''}; paint(states);
+    }
+  };
+  es.onerror=()=>{ finish(); };
 };
-
-function srcHtml(s){ if(!s||!s.u) return s&&s.n?('<span>'+s.n+'</span>'):''; return '<a href="'+s.u+'" target="_blank" rel="noopener">'+s.n+' &rarr;</a>'; }
-
-function render(key){
-  const d = DATA[key];
-  const badge = d.live ? '<span class="live-badge">Live-sourced</span>' : '<span class="sample-badge">Illustrative sample</span>';
-  let h = '';
-  h += '<div class="ihead"><div class="kick">Intel Brief · No. '+d.no+'</div>'+
-       '<div class="word">The Brief<span class="pd">.</span></div>'+
-       '<div class="tl">Curated for '+d.label+'</div></div>';
-  h += '<div class="strip"><span>'+d.date+'</span><span>'+badge+' &nbsp; '+d.read+' min read</span></div>';
-  // editor
-  h += '<div class="editor"><div class="et">&#9888; Sr. Editor advisory · '+d.editor.verdict+'</div><ul>';
-  d.editor.notes.forEach(n=> h += '<li>'+n+'</li>'); h += '</ul></div>';
-  // toc
-  h += '<div class="toc"><div class="tt">In this issue</div><ol>';
-  d.toc.forEach(t=> h += '<li>'+t+'</li>'); h += '</ol></div>';
-  // body
-  h += '<div class="body">';
-  // big
-  const b=d.big;
-  h += '<div class="big"><div class="numrow"><span class="num">01</span><div class="pills">'+
-       '<span class="pill signal">Big Signal</span><span class="pill track">'+b.track+'</span>'+
-       '<span class="verified">&#10003; '+b.verified+' claims verified</span></div></div>'+
-       '<div class="hl">'+b.hl+'</div><div class="summary">'+b.summary+'</div><ul class="impl">';
-  b.impl.forEach(i=> h += '<li>'+i+'</li>'); h += '</ul><div class="src">Source: '+srcHtml(b.src)+'</div><div class="saction"><button class="sapprove" data-k="0">Approve story</button></div></div>';
-  // stories
-  d.stories.forEach((s,idx)=>{
-    h += '<div class="story"><div class="numrow"><span class="num">0'+(idx+2)+'</span><div class="pills">'+
-         '<span class="pill track">'+s.track+'</span></div></div>'+
-         '<div class="hl">'+s.hl+'</div><div class="summary">'+s.summary+'</div><ul class="impl">';
-    s.impl.forEach(i=> h += '<li>'+i+'</li>'); h += '</ul><div class="src">Source: '+srcHtml(s.src)+'</div><div class="saction"><button class="sapprove" data-k="'+(idx+1)+'">Approve story</button></div></div>';
-  });
-  // also
-  h += '<div class="also"><div class="at">Also noted</div>';
-  d.also.forEach(a=>{ h += '<div class="row"><span class="tk">'+a.tk+'</span><span class="hd">'+
-       (a.u?'<a href="'+a.u+'" target="_blank" rel="noopener">'+a.hd+'</a>':a.hd)+'</span></div>'; });
-  h += '</div>'; // also
-  h += '</div>'; // body
-  h += '<div class="ifoot">The Brief · curated, fact-checked intelligence · reply with feedback</div>';
-  document.getElementById('issue').innerHTML = h;
-  resetReview(1 + d.stories.length);
-}
-
-let REVIEW={total:0,done:0};
-function resetReview(total){
-  REVIEW={total:total, done:0};
-  const bar=document.getElementById('approvebar'); if(!bar) return;
-  bar.classList.remove('approved');
-  document.getElementById('amsg').innerHTML='Approve each story to unlock sending. <b id="acount">0 of '+total+'</b> approved.';
-  document.getElementById('ahint').textContent='Human-in-the-loop: you sign off on every story, not the batch.';
-  const btn=document.getElementById('abtn');
-  btn.style.display=''; btn.disabled=true; btn.classList.add('disabled'); btn.innerHTML='Schedule send';
-  btn.onclick=function(){
-    if(REVIEW.done<REVIEW.total) return;
-    bar.classList.add('approved');
-    document.getElementById('amsg').innerHTML='&#10003; Approved. Scheduled for the 7&nbsp;AM send.';
-    document.getElementById('ahint').textContent='Nothing went out until you signed off on every story.';
-    btn.style.display='none';
-  };
-  document.querySelectorAll('.sapprove').forEach(function(b){
-    b.onclick=function(){
-      if(b.classList.contains('done')) return;
-      b.classList.add('done'); b.innerHTML='&#10003; Approved';
-      REVIEW.done++;
-      var c=document.getElementById('acount'); if(c) c.textContent=REVIEW.done+' of '+REVIEW.total;
-      if(REVIEW.done===REVIEW.total){
-        document.getElementById('amsg').innerHTML='&#10003; All stories approved. Ready to send.';
-        var sb=document.getElementById('abtn'); sb.disabled=false; sb.classList.remove('disabled');
-      }
-    };
-  });
-}
-
-const gen = document.getElementById('gen');
-const brief = document.getElementById('brief');
-const steps = [...document.querySelectorAll('#gen .step')];
-let timer=null;
-
-function runGen(key, animate){
-  const d = DATA[key];
-  document.querySelectorAll('.aud').forEach(b=> b.classList.toggle('active', b.dataset.aud===key));
-  if(timer){clearTimeout(timer); timer=null;}
-  if(!animate){ render(key); gen.classList.remove('show'); brief.classList.add('show'); return; }
-  document.getElementById('gen-aud').innerHTML = d.label;
-  brief.classList.remove('show'); gen.classList.add('show');
-  steps.forEach(s=>s.classList.remove('on','cur'));
-  let i=0;
-  const tick=()=>{
-    steps.forEach((s,k)=>{ s.classList.toggle('cur',k===i); if(k<i) s.classList.add('on'); });
-    steps[i].classList.add('on');
-    i++;
-    if(i<=steps.length){ timer=setTimeout(tick, 430); }
-    else { timer=setTimeout(()=>{ gen.classList.remove('show'); render(key); brief.classList.add('show');
-            window.scrollTo({top:document.querySelector('.controls').offsetTop, behavior:'smooth'}); }, 360); }
-  };
-  tick();
-}
-
-document.querySelectorAll('.aud').forEach(btn=>{
-  btn.addEventListener('click',()=> runGen(btn.dataset.aud, true));
-});
-// initial load: show AI PM brief immediately (no animation), so the page is never empty
-runGen('aipm', false);
-</script>
-</body>
-</html>
+stopBtn.onclick=()=>{
+  if(curJob){ fetch('/api/stop/'+curJob,{method:'POST'}).catch(()=>{}); }
+  finish();
+};
+// Hybrid: open with a real baked issue instantly (free, never fails); the
+// Generate button runs a fresh one live. Keeps the demo showable on a phone
+// the moment it opens, with no wait and no API call.
+fetch('api/sample.json').then(r=>r.json()).then(s=>{
+  if(!s.html) return;
+  document.getElementById('cfg').innerHTML='<b>Sample issue</b> &middot; a real one this system shipped. Type an audience and hit <b>Generate</b> to run a fresh one live.';
+  document.getElementById('frame').srcdoc=s.html;
+  document.getElementById('result').classList.add('show');
+}).catch(()=>{});
+// Register the service worker so the home-screen icon installs + opens offline to the shell.
+if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
+</script><script>(function(){var g=document.getElementById('go');if(g){g.textContent='Generate (live) \u2192';g.onclick=function(e){e&&e.preventDefault();var c=document.getElementById('cfg');if(c)c.innerHTML='<b>Live generation</b> runs in the hosted version of this app. This static demo shows a real issue the system produced end-to-end \u2014 research \u2192 draft \u2192 fact-check \u2192 render.';};}var s=document.getElementById('stop');if(s)s.style.display='none';})();</script></body></html>
