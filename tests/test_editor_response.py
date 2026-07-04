@@ -1,7 +1,7 @@
 """Unit tests for sr_editor.parse_editor_response.
 
 Tests the response-parsing layer in isolation — no API calls. These cover the
-failure modes that have actually happened on real editor runs:
+failure modes that have actually happened during Pulse/Ledger retests:
 
   1. Model wraps JSON in markdown ```json ... ``` fences
   2. Model returns unparseable JSON
@@ -107,8 +107,8 @@ def test_must_fix_items_coerced_to_strings():
     assert all(isinstance(x, str) for x in out["must_fix"])
 
 
-def test_realistic_editor_verdict():
-    """Mirrors a realistic editor verdict shape (stale + fabricated-claim flags)."""
+def test_realistic_pulse_006_verdict():
+    """Mirrors the actual verdict shape from Pulse #006 retest (2026-05-26)."""
     raw = (
         '{"verdict": "FAIL", '
         '"must_fix": ['

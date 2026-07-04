@@ -1,14 +1,15 @@
 """Render a newsletter as Outlook-safe HTML + plaintext.
 
-Takes the structured story payload from the agent loop, applies the audience's
-derived palette, and emits a 600px table-based email that survives strict
-corporate Outlook (table-based, inline styles, no external CSS).
+Takes structured story payload from the agent loop, applies the newsletter's
+palette (cobalt/green for Ledger, teal/lime for Pulse, burgundy/magenta for
+Download), and emits a 600px table-based email that survives strict
+corporate Outlook (the v8-polish design we landed on).
 
 Public API:
     render_newsletter(newsletter, content, meta) -> (html_str, plaintext_str)
 
 Where:
-    newsletter: the audience slug (matches briefs/<slug>.json)
+    newsletter: 'ledger' | 'pulse' | 'download'
     content: {
         "top3": [Story, ...],         # exactly 2 or 3 entries
         "watchlist": [Signal, ...],   # 0-3 entries, omit section if empty
@@ -36,6 +37,50 @@ _CENTRAL_TZ = ZoneInfo("America/Chicago")
 _UTC_TZ = ZoneInfo("UTC")
 
 
+def _safe_url(url: Any) -> str:
+    """Return url only if it's an http(s) link, else "".
+
+    source_url / hero_image_url come from an LLM agent scraping the open web, so
+    a hostile or malformed page could yield a `javascript:` or `data:` URL that
+    survives html.escape() and becomes a live href / img src in the email.
+    Restrict to http(s); anything else (including empty / non-str) is dropped.
+    """
+    if not isinstance(url, str):
+        return ""
+    u = url.strip()
+    if u.lower().startswith(("http://", "https://")):
+        return u
+    return ""
+
+
+def coerce_excerpt(value: Any) -> str:
+    """Flatten a possibly-malformed source_excerpt into one clean string.
+
+    The model occasionally double-serializes the submit_newsletter payload as a
+    JSON *string* with unescaped quotes inside source_excerpt (verbatim article
+    quotes). The json-repair fallback in agent_loop then either splits the
+    excerpt across stray object keys or hands it back as a list/dict fragment.
+    Every consumer (Sr. Editor claim-verification, the build_review blockquote)
+    expects a single continuous string, so coerce any of those shapes — str /
+    list / dict / None — back into one. Degrades gracefully instead of breaking
+    layout or tripping the editor's "excerpt split across multiple keys" flag.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple)):
+        return " ".join(p for p in (coerce_excerpt(v) for v in value) if p)
+    if isinstance(value, dict):
+        # Fragmented shape: both keys and values are pieces of the original text.
+        parts: list[str] = []
+        for k, v in value.items():
+            parts.append(str(k).strip())
+            parts.append(coerce_excerpt(v))
+        return " ".join(p for p in parts if p)
+    return str(value).strip()
+
+
 def _format_filed_from_published(published_at_iso: str | None) -> str:
     """Convert an article's ISO 8601 publish timestamp to 'HH:MM CT'.
 
@@ -61,17 +106,80 @@ def _format_filed_from_published(published_at_iso: str | None) -> str:
     except (ValueError, OverflowError):
         return ""
 
-# --- Palettes ---------------------------------------------------------------
+# --- High-contrast chassis --------------------------------------------------
+# Every newsletter shares ONE bulletproof structure — black canvas, white story
+# cards, a near-black hero card — so contrast + dark-mode survival are constant.
+# Per-audience identity is a single ACCENT color (from the brand), plus a light
+# TINT of it for pills/implications on white cards. The model David approved:
+# lock the chassis, swap the accent.
+def _chassis(accent: str, *, tint: str, tint_ink: str) -> dict[str, str]:
+    return {
+        "outer_bg": "#0A0A0A",
+        "card_bg": "#0A0A0A",            # the "paper"/gutter is the black canvas
+        "white": "#FFFFFF",              # white story-card surface
+        "big_signal_bg": "#141414",      # near-black hero card (lifted off the canvas)
+        "big_signal_bg_gradient_end": "#141414",  # flat — no gradient to get mangled
+        "big_signal_accent": accent,     # hero numeral, pills, CTA, headline
+        "primary": accent,               # numerals/links/top-bar on white cards
+        "primary_tint": tint,
+        "ink": "#0A0A0A",                # black text on white cards
+        "ink_muted": "#6B6B6B",
+        "ink_hairline": "#E8E8E8",       # hairline between items on the white Other-news card
+        "story_pill_bg": "#0A0A0A",
+        "story_pill_fg": "#FFFFFF",
+        "track_tag_bg": tint,            # light accent tint — pill on white cards + on black
+        "track_tag_fg": tint_ink,        # readable accent text on the tint
+        "card_border": "#1A1A1A",
+        "implications_bg": tint,
+        "implications_border": accent,
+        "big_signal_meta_color": "#9A9A9A",
+        "big_signal_meta_pipe": "#444444",
+        "big_signal_body": "#ECECEC",    # near-white body on the dark hero
+        "big_signal_pill_border": accent,
+        "footer_brand_main": accent,
+        "footer_brand_sub": "#FFFFFF",
+        "footer_pipe": "#444444",
+        "wordmark_period": accent,
+        "footer_wordmark_period": accent,
+    }
 
-# Every audience's palette is DERIVED from its brief spec `theme` (below). No
-# newsletter-specific palettes are hardcoded.
-PALETTES: dict[str, dict[str, str]] = {}
+
+# --- Palettes ---------------------------------------------------------------
+# The original newsletters' bespoke branding lives in the audience config
+# packs (config/audiences/<pack>/palettes.json). Each entry carries branding
+# text plus a `chassis` block (accent + tint + tint_ink) that we expand onto
+# the shared high-contrast chassis here. Empty when no pack is present.
+
+def _load_palettes() -> dict[str, dict[str, str]]:
+    from scripts import audience_config
+    palettes: dict[str, dict[str, str]] = {}
+    for key, entry in audience_config.load_palettes().items():
+        entry = dict(entry)
+        chassis = entry.pop("chassis")
+        palettes[key] = {
+            **entry,
+            **_chassis(chassis["accent"], tint=chassis["tint"], tint_ink=chassis["tint_ink"]),
+        }
+    return palettes
+
+
+PALETTES: dict[str, dict[str, str]] = _load_palettes()
+
+
+def _load_feedback_email() -> str:
+    from scripts import audience_config
+    return audience_config.feedback_email() or "feedback@example.com"
+
+
+# Reply-with-feedback address in the footer — operator setting from the
+# audience config pack, with a placeholder default for pack-less checkouts.
+FEEDBACK_EMAIL: str = _load_feedback_email()
 
 # --- Per-audience theming ---------------------------------------------------
 # A platform audience's brief spec carries a small `theme` (3 base colors).
 # The full ~25-key palette is DERIVED from it, so every audience gets its own
 # consistent visual identity — generated once per audience, reused every issue
-# (a stable brand, not a per-run design).
+# (a stable brand, not a per-run design). No pack palette involved.
 
 def _hex_to_rgb(h: str) -> tuple[int, int, int]:
     h = h.lstrip("#")
@@ -89,50 +197,41 @@ def _tint(h: str, t: float) -> str:   # toward white
 
 
 def _palette_from_theme(theme: dict) -> dict[str, str]:
-    """Derive the full color palette from a 3-color theme (bg_dark, primary,
-    accent), plus optional ink/card_bg. bg_dark MUST be dark (white text sits
-    on it). Everything else is computed for coherent contrast."""
-    bg = theme.get("bg_dark", "#101626")
-    primary = theme.get("primary", "#3B5BFF")
-    accent = theme.get("accent", "#A78BFA")
-    ink = theme.get("ink", "#16181D")
-    white = "#FFFFFF"
-    card_bg = theme.get("card_bg", _tint(primary, 0.96))
-    return {
-        "outer_bg": bg, "card_bg": card_bg, "white": white,
-        "big_signal_bg": bg, "big_signal_bg_gradient_end": _mix(bg, "#000000", 0.45),
-        "big_signal_accent": accent, "primary": primary,
-        "primary_tint": _tint(primary, 0.90), "ink": ink,
-        "ink_muted": _tint(ink, 0.55), "ink_hairline": _tint(ink, 0.90),
-        "story_pill_bg": ink, "story_pill_fg": white,
-        "track_tag_bg": _tint(primary, 0.90), "track_tag_fg": primary,
-        "card_border": _tint(ink, 0.88),
-        "implications_bg": _tint(primary, 0.90), "implications_border": primary,
-        "big_signal_meta_color": _mix(bg, white, 0.62),
-        "big_signal_meta_pipe": _mix(bg, white, 0.30),
-        "big_signal_body": _mix(bg, white, 0.80),
-        "big_signal_pill_border": _mix(bg, white, 0.30),
-        "footer_brand_main": accent, "footer_brand_sub": white,
-        "footer_pipe": _mix(bg, white, 0.30),
-        "wordmark_period": primary, "footer_wordmark_period": accent,
-    }
+    """Platform audiences ride the same high-contrast chassis; their identity is
+    a single accent pulled from the spec's `theme` (primary preferred, else
+    accent). The light tint + its ink are derived for readable pills on white."""
+    accent = theme.get("primary") or theme.get("accent") or "#3B5BFF"
+    return _chassis(accent, tint=_tint(accent, 0.88), tint_ink=_mix(accent, "#000000", 0.30))
 
 
 def _effective_palette(newsletter: str) -> dict[str, Any]:
-    """Palette for an audience: colors are DERIVED from the brief spec's `theme`,
-    and all branding TEXT (name, category, subtitle, footer) comes from the spec."""
+    """Palette for a newsletter. Pack newsletters have bespoke palettes
+    (config/audiences/). ANY other name is a platform audience: colors come
+    from the spec's `theme` (derived), and ALL branding TEXT comes from the
+    spec — nothing pack-specific."""
+    if newsletter in PALETTES:
+        return PALETTES[newsletter]
     import json as _json
     from pathlib import Path as _Path
     spec_path = _Path(__file__).resolve().parent.parent / "briefs" / f"{newsletter}.json"
     spec = _json.loads(spec_path.read_text()) if spec_path.exists() else {}
-    pal = _palette_from_theme(spec.get("theme") or {})
+    theme = spec.get("theme")
+    if theme:
+        pal = _palette_from_theme(theme)
+    else:
+        # Theme-less spec: the pack can nominate one of its palettes as the
+        # fallback brand; without one, derive a neutral default.
+        from scripts import audience_config
+        fallback = audience_config.fallback_palette()
+        pal = dict(PALETTES[fallback]) if fallback in PALETTES else _palette_from_theme({})
     name = spec.get("display_name", newsletter)
     pal["name"] = name
     pal["category_main"] = spec.get("category_main") or name
     pal["category_sub"] = spec.get("category_sub", "Intel")
-    pal["subtitle"] = spec.get("subtitle", "")
+    pal["subtitle"] = spec.get("subtitle", pal.get("subtitle", ""))
     pal["implications_label"] = spec.get("implications_label", "For readers")
     pal["footer_tagline"] = spec.get("footer_tagline", f"Curated for {name} readers.")
+    pal["wants_korean"] = spec.get("wants_korean", False)
     pal["feedback_subject_token"] = name
     return pal
 
@@ -165,7 +264,7 @@ def render_newsletter(
 ) -> tuple[str, str]:
     """Render the newsletter to HTML and plaintext.
 
-    Shape:
+    Shape (as of 2026-05-22, Download-only, 2x/week cadence):
       content = {
         "top_stories": [{...story dict...}, ...]  # 1 to 3 stories.
                                                   # First is Big Signal.
@@ -178,9 +277,11 @@ def render_newsletter(
         "notes": str,
     }
     If provided AND must_fix is non-empty, renders a yellow advisory
-    banner at the top of the email body for the human reviewer.
+    banner at the very top of the email body so David sees it first
+    during morning review.
     """
-    # Palette colors + all branding text are derived from briefs/<name>.json.
+    # Pack newsletters use bespoke palettes; platform audiences get a derived
+    # palette with branding text pulled from briefs/<name>.json.
     palette = _effective_palette(newsletter)
     top_stories = _enforce_top_stories_caps(content.get("top_stories") or [])
     other_news = _trim_other_news(content.get("other_news") or [])
@@ -213,6 +314,17 @@ def _truncate_chars(text: str, max_chars: int) -> str:
     return text[: max_chars - 1].rstrip(" ,;:.") + "…"
 
 
+def _truncate_chars_word(text: str, max_chars: int) -> str:
+    """Like _truncate_chars but clips at the last whole word inside max_chars,
+    so the ellipsis never lands mid-word (e.g. 'undercuts ACH…' not 'ACH o…')."""
+    if not isinstance(text, str) or len(text) <= max_chars:
+        return text
+    head = text[:max_chars]
+    if " " in head:
+        head = head.rsplit(" ", 1)[0]
+    return head.rstrip(" ,;:.—-") + "…"
+
+
 def _enforce_top_stories_caps(stories: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Trim each top story's summary (≤35 words) and implications bullets (≤14 words). Cap to 3."""
     out = []
@@ -232,16 +344,18 @@ def _enforce_top_stories_caps(stories: list[dict[str, Any]]) -> list[dict[str, A
 
 
 def _trim_other_news(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Trim Other News fields: headline (≤80 chars), subtitle (≤14 words).
+    """Trim Other News fields: headline (≤80 chars), subtitle (≤14 words, ≤72 chars).
     NO summary in Other News — it's a scan-only block. Track + Headline +
-    Subtitle + Source URL only."""
+    Subtitle + Source URL only. The subtitle char cap (~72) keeps it to a
+    single rendered line at the ~500px content width / 13px font — the CSS
+    one-line clamp can't be relied on in email tables, so it hard-cuts."""
     out = []
     for item in items[:5]:
         clean = dict(item)
         if clean.get("headline"):
             clean["headline"] = _truncate_chars(clean["headline"], 80)
         if clean.get("subtitle"):
-            clean["subtitle"] = _truncate_words(clean["subtitle"], 14)
+            clean["subtitle"] = _truncate_chars_word(_truncate_words(clean["subtitle"], 14), 72)
         # Strip summary if agent sent one (no longer rendered)
         clean.pop("summary", None)
         out.append(clean)
@@ -255,8 +369,10 @@ def _build_html(palette, top_stories, other_news, meta, editor_concerns=None, *,
     parts: list[str] = []
     parts.append(_html_head(palette, meta, top_stories))
     parts.append(_html_open_outer(palette))
-    # Editor concerns banner — shown FIRST so the reviewer sees it during review.
-    if editor_concerns and editor_concerns.get("must_fix"):
+    # Editor concerns banner — shown FIRST so David sees it during AM review.
+    # It's a sending-mode artifact (the banner itself says "delete this block
+    # before sending"), so the demo/public render omits it for a clean look.
+    if include_reply_footer and editor_concerns and editor_concerns.get("must_fix"):
         parts.append(_html_editor_concerns(palette, editor_concerns))
     parts.append(_html_top_accent(palette))
     parts.append(_html_masthead(palette, issue_str, meta))
@@ -284,7 +400,9 @@ def _html_head(palette, meta, top_stories) -> str:
     preheader = " &middot; ".join(preheader_parts)
     return f"""<!doctype html><html lang="en"><head>\
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">\
+<meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark">\
 <title>{escape(palette['name'])} &middot; &#8470; {issue_str} &mdash; {escape(meta['date_dd_mm_yy'])}</title>\
+<style>:root{{color-scheme:dark;supported-color-schemes:dark;}}</style>\
 </head><body bgcolor="{palette['outer_bg']}" style="margin:0; padding:0; background:{palette['outer_bg']}; -webkit-font-smoothing:antialiased;">\
 <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">{preheader}</div>"""
 
@@ -313,7 +431,7 @@ def _html_top_accent(palette) -> str:
 def _html_editor_concerns(palette, concerns: dict[str, Any]) -> str:
     """Render the Sr. Editor advisory banner at the top of the email.
 
-    Visible only to the reviewer during review — this block should be DELETED
+    Visible only to David during review — this block should be DELETED
     from the draft before sending to subscribers. We mark it visually so
     it's obvious it's review-only.
     """
@@ -351,31 +469,31 @@ def _html_editor_concerns(palette, concerns: dict[str, Any]) -> str:
 
 
 def _html_masthead(palette, issue_str, meta) -> str:
-    return f"""<tr><td bgcolor="{palette['white']}" style="background:{palette['white']}; padding:24px 28px 0 28px;">\
+    return f"""<tr><td bgcolor="{palette['card_bg']}" style="background:{palette['card_bg']}; padding:26px 28px 0 28px;">\
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>\
-<td valign="middle" style="vertical-align:middle; font-family:{SANS}; font-size:13px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; color:{palette['ink']}; line-height:1;">\
-{escape(palette['category_main'])} <span style="color:{palette['ink_hairline']}; padding:0 6px;">/</span><span style="color:{palette['ink_muted']};">{escape(palette['category_sub'])}</span>\
+<td valign="middle" style="vertical-align:middle; font-family:{SANS}; font-size:12px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; color:#B0B0B0; line-height:1;">\
+{escape(palette['category_main'])} <span style="color:#444444; padding:0 6px;">/</span><span style="color:#8C8C8C;">{escape(palette['category_sub'])}</span>\
 </td>\
-<td align="right" valign="middle" style="font-family:{MONO}; font-size:11px; font-weight:600; letter-spacing:0.04em; color:{palette['primary']}; line-height:1; white-space:nowrap;">No.&nbsp;{issue_str}&nbsp;&nbsp;&middot;&nbsp;&nbsp;{escape(meta['date_dd_mm_yy'])}</td>\
+<td align="right" valign="middle" style="font-family:{MONO}; font-size:11px; font-weight:700; letter-spacing:0.04em; color:{palette['primary']}; line-height:1; white-space:nowrap;">No.&nbsp;{issue_str}&nbsp;&nbsp;&middot;&nbsp;&nbsp;{escape(meta['date_dd_mm_yy'])}</td>\
 </tr></table></td></tr>"""
 
 
 def _html_wordmark(palette) -> str:
     name = palette["name"]
-    return f"""<tr><td bgcolor="{palette['white']}" style="background:{palette['white']}; padding:18px 28px 0 28px;">\
-<div style="font-family:{SANS}; font-size:48px; font-weight:900; letter-spacing:-0.035em; line-height:0.98; color:{palette['ink']};">\
+    return f"""<tr><td bgcolor="{palette['card_bg']}" style="background:{palette['card_bg']}; padding:16px 28px 0 28px;">\
+<div style="font-family:{SANS}; font-size:50px; font-weight:900; letter-spacing:-0.03em; line-height:0.96; text-transform:uppercase; color:#FFFFFF;">\
 {escape(name)}<span style="color:{palette['wordmark_period']};">.</span></div></td></tr>"""
 
 
 def _html_tagline(palette) -> str:
-    return f"""<tr><td bgcolor="{palette['white']}" style="background:{palette['white']}; padding:12px 28px 0 28px;">\
-<div style="font-family:{SANS}; font-size:14px; font-weight:500; line-height:1.5; color:{palette['ink_muted']};">{palette['subtitle']}</div></td></tr>"""
+    return f"""<tr><td bgcolor="{palette['card_bg']}" style="background:{palette['card_bg']}; padding:12px 28px 0 28px;">\
+<div style="font-family:{SANS}; font-size:14px; font-weight:500; line-height:1.5; color:#9A9A9A;">{palette['subtitle']}</div></td></tr>"""
 
 
 def _html_divider_row(palette) -> str:
-    return f"""<tr><td bgcolor="{palette['white']}" style="background:{palette['white']}; padding:20px 28px 0 28px;">\
+    return f"""<tr><td bgcolor="{palette['card_bg']}" style="background:{palette['card_bg']}; padding:18px 28px 0 28px;">\
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">\
-<tr><td bgcolor="{palette['ink']}" height="1" style="height:1px; line-height:1px; font-size:0; background:{palette['ink']};">&nbsp;</td></tr></table></td></tr>"""
+<tr><td bgcolor="{palette['primary']}" height="2" style="height:2px; line-height:2px; font-size:0; background:{palette['primary']};">&nbsp;</td></tr></table></td></tr>"""
 
 
 def _html_edition_strip(palette, meta) -> str:
@@ -385,12 +503,12 @@ def _html_edition_strip(palette, meta) -> str:
     # Day + date together. No edition label, no filed time — generation/review
     # happen at different times so those got noisy. Just date + read estimate.
     day_label = f"{weekday}&nbsp;{date.replace('.','&nbsp;')}" if weekday else date
-    return f"""<tr><td bgcolor="{palette['white']}" style="background:{palette['white']}; padding:12px 28px 22px 28px;">\
+    return f"""<tr><td bgcolor="{palette['card_bg']}" style="background:{palette['card_bg']}; padding:12px 28px 22px 28px;">\
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>\
-<td valign="middle" style="font-family:{MONO}; font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:{palette['ink']}; line-height:1;">\
+<td valign="middle" style="font-family:{MONO}; font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#B0B0B0; line-height:1;">\
 {day_label}</td>\
-<td align="right" valign="middle" style="font-family:{MONO}; font-size:11px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:{palette['ink_muted']}; line-height:1; white-space:nowrap;">\
-<span style="color:{palette['ink']};">{min_read}</span>&nbsp;min&nbsp;read</td></tr></table></td></tr>"""
+<td align="right" valign="middle" style="font-family:{MONO}; font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#8C8C8C; line-height:1; white-space:nowrap;">\
+<span style="color:#FFFFFF;">{min_read}</span>&nbsp;min&nbsp;read</td></tr></table></td></tr>"""
 
 
 def _html_toc(palette, top_stories, other_news) -> str:
@@ -439,15 +557,26 @@ def _html_big_signal_card(palette, story) -> str:
         or story.get("filed_time", "")
     )
     dateline = escape(story.get("dateline", ""))
-    hero_url = story.get("hero_image_url") or ""
+    hero_url = _safe_url(story.get("hero_image_url"))
     hero_html = ""
     if hero_url:
         hero_html = (
             f'<tr><td style="padding:18px 24px 0 24px;">'
-            f'<a href="{escape(story.get("source_url",""))}" style="text-decoration:none;">'
+            f'<a href="{escape(_safe_url(story.get("source_url")))}" style="text-decoration:none;">'
             f'<img src="{escape(hero_url)}" width="520" height="293" alt="{headline}" style="display:block; width:100%; max-width:520px; height:auto; border:0; border-radius:4px;"></a></td></tr>'
         )
-    bullets_html = _render_implications_bullets(story.get("implications", []), p, on_dark_card=True)
+    implications = story.get("implications") or []
+    bullets_html = _render_implications_bullets(implications, p, on_dark_card=True)
+    # Implications inset — only when the story has implications. A promoted/thin
+    # bench story with none must not render an empty "IMPLICATIONS / ..." box.
+    implications_html = (
+        f'<tr><td style="padding:22px 24px 0 24px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="{p["white"]}" style="background:{p["white"]}; border-radius:6px;">'
+        f'<tr><td style="padding:16px 22px 4px 22px;">'
+        f'<div style="font-family:{MONO}; font-size:10px; font-weight:700; letter-spacing:0.16em; text-transform:uppercase; color:{p["primary"]}; line-height:1;">Implications&nbsp;/&nbsp;<span style="color:{p["ink"]};">{escape(p.get("implications_label", "For readers")).replace(" ", "&nbsp;")}</span></div></td></tr>'
+        f'<tr><td style="padding:10px 22px 18px 22px;">{bullets_html}</td></tr></table></td></tr>'
+    ) if implications else ""
+    korean_takeaway_html = _render_korean_takeaway(story.get("korean_takeaway"), p, on_dark_card=True) if p.get("wants_korean") else ""
     # Meta strip: dateline only (the "Filed HH:MM CT" stamp was dropped — it was
     # inconsistent across stories and added noise).
     meta_inner = dateline
@@ -477,20 +606,17 @@ def _html_big_signal_card(palette, story) -> str:
         f'<tr><td style="padding:14px 24px 0 24px;">'
         f'<div style="font-family:{MONO}; font-size:10px; font-weight:600; letter-spacing:0.10em; text-transform:uppercase; color:{p["big_signal_meta_color"]}; line-height:1;">{meta_inner}</div></td></tr>'
         + hero_html
-        # Headline (Georgia serif)
-        + f'<tr><td style="padding:22px 24px 0 24px; font-family:{SERIF}; font-size:30px; font-weight:700; line-height:1.12; letter-spacing:-0.01em; color:#FFFFFF;">{headline}</td></tr>'
+        # Headline — bold condensed display in the accent color (Half Baked DNA)
+        + f'<tr><td style="padding:20px 24px 0 24px; font-family:{ARIAL_BLACK}; font-size:32px; font-weight:900; line-height:1.05; letter-spacing:-0.02em; text-transform:uppercase; color:{p["big_signal_accent"]};">{headline}</td></tr>'
         # Summary
         + f'<tr><td style="padding:14px 24px 0 24px; font-family:{SANS}; font-size:15px; line-height:1.6; color:{p["big_signal_body"]};">{summary}</td></tr>'
-        # Implications white inset
-        + f'<tr><td style="padding:22px 24px 0 24px;">'
-        + f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="{p["white"]}" style="background:{p["white"]}; border-radius:6px;">'
-        + f'<tr><td style="padding:16px 22px 4px 22px;">'
-        + f'<div style="font-family:{MONO}; font-size:10px; font-weight:700; letter-spacing:0.16em; text-transform:uppercase; color:{p["primary"]}; line-height:1;">Implications&nbsp;/&nbsp;<span style="color:{p["ink"]};">{escape(p.get("implications_label", "For readers")).replace(" ", "&nbsp;")}</span></div></td></tr>'
-        + f'<tr><td style="padding:10px 22px 18px 22px;">{bullets_html}</td></tr></table></td></tr>'
+        + korean_takeaway_html
+        # Implications white inset — only when present (see implications_html)
+        + implications_html
         # Read CTA
         + f'<tr><td style="padding:20px 24px 24px 24px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
         + f'<td style="padding-right:10px; font-family:{SANS}; font-size:13px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; line-height:1;">'
-        + f'<a href="{escape(story.get("source_url",""))}" style="color:{p["big_signal_accent"]}; text-decoration:none;">Read&nbsp;the&nbsp;full&nbsp;story</a></td>'
+        + f'<a href="{escape(_safe_url(story.get("source_url")))}" style="color:{p["big_signal_accent"]}; text-decoration:none;">Read&nbsp;the&nbsp;full&nbsp;story</a></td>'
         + f'<td style="font-family:{MONO}; font-size:13px; font-weight:700; color:{p["big_signal_accent"]}; line-height:1;">&mdash;&mdash;&mdash;&nbsp;&rarr;</td>'
         + "</tr></table></td></tr></table></td></tr>"
     )
@@ -510,15 +636,21 @@ def _html_standard_card(palette, story, idx) -> str:
         or story.get("filed_time", "")
     )
     dateline = escape(story.get("dateline", ""))
-    hero_url = story.get("hero_image_url") or ""
+    # Standard stories (02, 03) are text-only by design — only the Big Signal
+    # (Story 01) is illustrated, so the issue reads consistently instead of a
+    # hero appearing on some lower stories but not others.
     hero_html = ""
-    if hero_url:
-        hero_html = (
-            f'<tr><td style="padding:18px 24px 0 24px;">'
-            f'<a href="{escape(story.get("source_url",""))}" style="text-decoration:none;">'
-            f'<img src="{escape(hero_url)}" width="520" height="293" alt="{headline}" style="display:block; width:100%; max-width:520px; height:auto; border:0; border-radius:4px;"></a></td></tr>'
-        )
-    bullets_html = _render_implications_bullets(story.get("implications", []), p, on_dark_card=False)
+    implications = story.get("implications") or []
+    bullets_html = _render_implications_bullets(implications, p, on_dark_card=False)
+    # Implications inset — only when the story has implications (see big-signal card).
+    implications_html = (
+        f'<tr><td style="padding:22px 24px 0 24px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="{p["implications_bg"]}" style="background:{p["implications_bg"]}; border-left:3px solid {p["implications_border"]}; border-radius:4px;">'
+        f'<tr><td style="padding:14px 18px 6px 18px;">'
+        f'<div style="font-family:{MONO}; font-size:10px; font-weight:700; letter-spacing:0.16em; text-transform:uppercase; color:{p["primary"]}; line-height:1;">Implications&nbsp;/&nbsp;<span style="color:{p["ink"]};">{escape(p.get("implications_label", "For readers")).replace(" ", "&nbsp;")}</span></div></td></tr>'
+        f'<tr><td style="padding:6px 18px 16px 18px;">{bullets_html}</td></tr></table></td></tr>'
+    ) if implications else ""
+    korean_takeaway_html = _render_korean_takeaway(story.get("korean_takeaway"), p, on_dark_card=False) if p.get("wants_korean") else ""
     # Meta strip: dateline only (Filed timestamp dropped).
     meta_inner = f'<span style="color:{p["ink_muted"]};">{dateline}</span>'
     return (
@@ -534,29 +666,27 @@ def _html_standard_card(palette, story, idx) -> str:
         f'</tr></table></td></tr></table></td></tr>'
         f'<tr><td style="padding:12px 24px 0 24px;"><div style="font-family:{MONO}; font-size:10px; font-weight:600; letter-spacing:0.10em; text-transform:uppercase; color:{p["ink_muted"]}; line-height:1;">{meta_inner}</div></td></tr>'
         + hero_html
-        + f'<tr><td style="padding:22px 24px 0 24px; font-family:{SANS}; font-size:26px; font-weight:900; letter-spacing:-0.025em; line-height:1.12; color:{p["ink"]};">{headline}</td></tr>'
+        + f'<tr><td style="padding:20px 24px 0 24px; font-family:{ARIAL_BLACK}; font-size:26px; font-weight:900; letter-spacing:-0.02em; line-height:1.08; text-transform:uppercase; color:{p["ink"]};">{headline}</td></tr>'
         + f'<tr><td style="padding:12px 24px 0 24px; font-family:{SANS}; font-size:15px; line-height:1.6; color:{p["ink"]};">{summary}</td></tr>'
-        + f'<tr><td style="padding:22px 24px 0 24px;">'
-        + f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="{p["implications_bg"]}" style="background:{p["implications_bg"]}; border-left:3px solid {p["implications_border"]}; border-radius:4px;">'
-        + f'<tr><td style="padding:14px 18px 6px 18px;">'
-        + f'<div style="font-family:{MONO}; font-size:10px; font-weight:700; letter-spacing:0.16em; text-transform:uppercase; color:{p["primary"]}; line-height:1;">Implications&nbsp;/&nbsp;<span style="color:{p["ink"]};">{escape(p.get("implications_label", "For readers")).replace(" ", "&nbsp;")}</span></div></td></tr>'
-        + f'<tr><td style="padding:6px 18px 16px 18px;">{bullets_html}</td></tr></table></td></tr>'
+        + korean_takeaway_html
+        + implications_html
         + f'<tr><td style="padding:18px 24px 24px 24px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
         + f'<td style="padding-right:10px; font-family:{SANS}; font-size:13px; font-weight:700; letter-spacing:0.04em; text-transform:uppercase; line-height:1;">'
-        + f'<a href="{escape(story.get("source_url",""))}" style="color:{p["primary"]}; text-decoration:none;">Read&nbsp;the&nbsp;full&nbsp;story</a></td>'
+        + f'<a href="{escape(_safe_url(story.get("source_url")))}" style="color:{p["primary"]}; text-decoration:none;">Read&nbsp;the&nbsp;full&nbsp;story</a></td>'
         + f'<td style="font-family:{MONO}; font-size:13px; font-weight:700; color:{p["primary"]}; line-height:1;">&mdash;&mdash;&mdash;&nbsp;&rarr;</td>'
         + "</tr></table></td></tr></table></td></tr>"
     )
 
 
 def _render_implications_bullets(implications, palette, *, on_dark_card: bool) -> str:
-    """Render the implications bullets."""
+    """Render the 2 EN (and optional 1 KO) bullets."""
     p = palette
     rows: list[str] = []
     text_color = p["ink"]
     for bullet in implications:
         if not isinstance(bullet, str):
             continue
+        is_korean = any(0xAC00 <= ord(ch) <= 0xD7A3 for ch in bullet)
         marker = "→"
         bullet_color = p["primary"]
         rows.append(
@@ -567,6 +697,33 @@ def _render_implications_bullets(implications, palette, *, on_dark_card: bool) -
         )
     return "".join(rows)
 
+
+def _render_korean_takeaway(takeaway: str | None, palette, *, on_dark_card: bool) -> str:
+    """Render the bilingual Korean 핵심 요약 block (Ledger + Pulse only).
+
+    on_dark_card=True  → Big Signal context, dark bg → use light body color
+    on_dark_card=False → standard card on white → use dark ink color
+    """
+    if not takeaway:
+        return ""
+    p = palette
+    # Body color must contrast with the card it sits on. On Big Signal we use
+    # pure white; on white standard cards we use ink. Earlier attempts at a
+    # Korean-specific font stack (Apple SD Gothic Neo / Malgun Gothic / Nanum
+    # Gothic) broke because double-quoted font names inside double-quoted
+    # style attributes terminated the style early — color never applied,
+    # appearing as low-contrast inherited text. Reverted to system SANS;
+    # OS-default Korean font picks up via fallback (same as the rest of the
+    # email's Korean handling).
+    body_color = "#FFFFFF" if on_dark_card else p["ink"]
+    return (
+        f'<tr><td style="padding:14px 24px 0 24px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-left:3px solid {p["big_signal_accent"]};">'
+        f'<tr><td style="padding:8px 0 8px 14px;">'
+        f'<div style="font-family:{MONO}; font-size:10px; font-weight:700; letter-spacing:0.16em; text-transform:uppercase; color:{p["big_signal_accent"]}; line-height:1; padding-bottom:6px;">핵심&nbsp;요약 / Key Takeaway</div>'
+        f'<div style="font-family:{SANS}; font-size:14px; font-weight:500; line-height:1.55; color:{body_color};">{escape(takeaway)}</div>'
+        f'</td></tr></table></td></tr>'
+    )
 
 
 def _html_other_news(palette, items: list[dict[str, Any]]) -> str:
@@ -581,7 +738,7 @@ def _html_other_news(palette, items: list[dict[str, Any]]) -> str:
         headline = escape(item.get("headline", ""))
         subtitle = escape(item.get("subtitle", ""))
         summary = escape(item.get("summary", ""))
-        source_url = escape(item.get("source_url", ""))
+        source_url = escape(_safe_url(item.get("source_url")))
         headline_html = (
             f'<a href="{source_url}" style="color:{p["ink"]}; text-decoration:none;">{headline}</a>'
             if source_url else headline
@@ -622,11 +779,11 @@ def _html_other_news(palette, items: list[dict[str, Any]]) -> str:
 def _html_footer(palette, issue_str, meta, *, include_reply_footer=True) -> str:
     p = palette
     feedback_subject = f"Feedback%20%E2%80%94%20{p['feedback_subject_token']}%20%E2%84%96%20{issue_str}"
-    tagline = p.get("footer_tagline", f"Curated for {p['category_main']} readers.")
+    tagline = p.get("footer_tagline", f"Curated for the {p['category_main']} team.")
     # include_reply_footer == "sending mode": show the reply line + the
     # "internal use only" notice. Demo/public (GitHub) render omits both.
     reply_row = (
-        f'<tr><td style="padding:18px 24px 0 24px; font-family:{SANS}; font-size:13px; font-weight:500; line-height:1.55; color:#D4CACD;">Reply to this email with feedback &mdash; <a href="mailto:feedback@example.com?subject={feedback_subject}" style="color:{p["footer_brand_main"]}; text-decoration:underline;">feedback@example.com</a></td></tr>'
+        f'<tr><td style="padding:18px 24px 0 24px; font-family:{SANS}; font-size:13px; font-weight:500; line-height:1.55; color:#D4CACD;">Reply to this email with feedback &mdash; <a href="mailto:{FEEDBACK_EMAIL}?subject={feedback_subject}" style="color:{p["footer_brand_main"]}; text-decoration:underline;">{FEEDBACK_EMAIL}</a></td></tr>'
         if include_reply_footer else ""
     )
     internal_label = "Internal&nbsp;use&nbsp;only&nbsp;&middot;&nbsp;Not&nbsp;for&nbsp;redistribution" if include_reply_footer else ""
@@ -658,7 +815,8 @@ def _html_footer(palette, issue_str, meta, *, include_reply_footer=True) -> str:
 def _build_plaintext(palette, top_stories, other_news, meta, editor_concerns=None, *, include_reply_footer=True) -> str:
     issue_str = f"{meta['issue_number']:03d}"
     out: list[str] = []
-    if editor_concerns and editor_concerns.get("must_fix"):
+    # Sending-mode artifact only — omitted from the demo/public render.
+    if include_reply_footer and editor_concerns and editor_concerns.get("must_fix"):
         out.append("⚠ SR. EDITOR ADVISORY — DELETE BEFORE SENDING ⚠")
         out.append(f"Verdict: {editor_concerns.get('verdict','')}")
         out.append(f"Concerns ({len(editor_concerns['must_fix'])}):")
@@ -680,9 +838,14 @@ def _build_plaintext(palette, top_stories, other_news, meta, editor_concerns=Non
             _meta_bits.append(story["dateline"])
         out.append(f"     {' · '.join(b for b in _meta_bits if b)}")
         out.append(f"     {story.get('summary','')}")
-        for b in story.get("implications", []):
+        # `or []` (not a default arg): a story with implications=null must not
+        # crash the plaintext build — matches the HTML cards. A promoted thin
+        # bench story legitimately can carry no implications.
+        for b in story.get("implications") or []:
             out.append(f"     → {b}")
-        out.append(f"     ↳ {story.get('source_url','')}")
+        _surl = _safe_url(story.get("source_url"))
+        if _surl:
+            out.append(f"     ↳ {_surl}")
         out.append("")
     if other_news:
         out.append("OTHER NEWS")
@@ -690,11 +853,12 @@ def _build_plaintext(palette, top_stories, other_news, meta, editor_concerns=Non
             out.append(f"  {idx+1:02d}  [{item.get('track','')}]  {item.get('headline','')}")
             if item.get("subtitle"):
                 out.append(f"        {item.get('subtitle','')}")
-            if item.get("source_url"):
-                out.append(f"        ↳ {item.get('source_url','')}")
+            _surl = _safe_url(item.get("source_url"))
+            if _surl:
+                out.append(f"        ↳ {_surl}")
             out.append("")
     if include_reply_footer:
-        out.append("Reply to this email with feedback — feedback@example.com")
+        out.append(f"Reply to this email with feedback — {FEEDBACK_EMAIL}")
         out.append(f"Internal use only · Not for redistribution · {meta['date_dd_mm_yy']}")
     else:
         out.append(meta['date_dd_mm_yy'])

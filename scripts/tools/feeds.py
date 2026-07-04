@@ -15,6 +15,7 @@ Public API:
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from itertools import zip_longest
 from typing import Any
 from urllib.parse import urlparse
 
@@ -128,6 +129,15 @@ def fetch_feed_candidates(
                 "source_domain": _entry_domain(link),
             })
 
-    # most-recent first; no-date entries (date.min sentinel) sink to the bottom
+    # Recency-sort, then round-robin across domains so a few high-volume feeds
+    # (TechCrunch, 9to5, Verge) can't flood the pool and crowd out authoritative
+    # outlets before the `limit` cap. Each domain keeps its recency order; the
+    # downstream ranker then picks by relevance from this diverse menu.
     candidates.sort(key=lambda c: c["published_date"] or date.min, reverse=True)
-    return candidates[:limit], warnings
+    by_domain: dict[str, list[dict[str, Any]]] = {}
+    for c in candidates:
+        by_domain.setdefault(c["source_domain"], []).append(c)
+    interleaved = [
+        c for tier in zip_longest(*by_domain.values()) for c in tier if c is not None
+    ]
+    return interleaved[:limit], warnings

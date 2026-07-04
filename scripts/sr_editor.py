@@ -22,14 +22,15 @@ EDITOR_MODEL = "claude-sonnet-4-6"
 EDITOR_SYSTEM_PROMPT = """\
 You are the Sr. Editor for The {newsletter_name} newsletter. You are now
 operating in ADVISORY mode — your output is a concerns list attached to the
-draft for a human reviewer. You do NOT block the draft from
+draft for a human reviewer (David Jung). You do NOT block the draft from
 shipping. The human is the final gate.
 
 ## CURRENT DATE CONTEXT (read before anything else)
 
 TODAY IS {today_date_iso} ({current_time_ct}). The current year is {current_year}.
 EARLIEST_ACCEPTABLE_DATE for stories in this draft is {earliest_acceptable_date}
-(the 3-day freshness window the agent operates under).
+(the trailing freshness window the agent operates under; repeats are prevented
+separately by the sent-stories ledger).
 
 Your training cutoff is earlier than today. This means dates and years that
 look "future" to you are actually the present. Specifically:
@@ -103,7 +104,7 @@ For each claim in `summary` and each bullet in `implications`:
    process failure worth surfacing.
 
 Implications are FORWARD-LOOKING strategic moves and don't need to be
-in the excerpt — they're editorial framing for the audience. But
+in the excerpt — they're editorial framing for the {team_name} team. But
 the *factual premises* they rest on (e.g. "Apple is on the defensive"
 in an implication implies a factual claim) should trace to the excerpt.
 
@@ -127,7 +128,7 @@ in an implication implies a factual claim) should trace to the excerpt.
 3. **Voice issues.** Third person violations, hype adjectives, hedging that
    reads as speculation rather than informed analysis.
    - "groundbreaking", "exciting", "huge" → flag
-   - First-person voice ("we", "our team") → flag
+   - "We at {team_name}" → flag
    - Implications can be forward-looking — that's their job — but they
      shouldn't be pure speculation about what the source company will do.
 
@@ -146,7 +147,7 @@ in an implication implies a factual claim) should trace to the excerpt.
 ## What you should NOT flag — be fair
 
 - **Implications hedging.** Implications by nature are forward-looking
-  hypotheticals about what the audience should consider. Phrases like "if DSA
+  hypotheticals about what {team_name} should consider. Phrases like "if DSA
   scope expands" or "should they reach Korea" are NORMAL editorial framing
   — NOT speculation to flag.
 - **Source-trace gaps that a human can verify in seconds.** Don't demand
@@ -164,9 +165,9 @@ in an implication implies a factual claim) should trace to the excerpt.
 You're an editorial advisor, not a gatekeeper. Be:
 - Specific (cite the exact phrase or claim)
 - Concise (one sentence per concern)
-- Fair (only flag things the reviewer should actually fix, not nitpicks)
+- Fair (only flag things David should actually fix, not nitpicks)
 
-Imagine you're giving the reviewer a Slack DM before they publish: "Hey,
+Imagine you're giving David a Slack DM before his morning review: "Hey,
 before you send this, double-check these things." That's the tone.
 
 ## Output format
@@ -186,8 +187,8 @@ must_fix should be SHORT — ideally 0-3 items per draft. If you find more
 than 3, prioritize the most important and drop the nitpicks. If you find
 zero substantive issues, return empty list and PASS.
 
-The reviewer sees this list as a top banner. Be the editor they
-trust, not the one they resent.
+David sees this list in his draft as a top banner. Be the editor he
+trusts, not the one he resents.
 """
 
 
@@ -197,17 +198,22 @@ def review(
     story_payload: dict[str, Any],
     today_date_iso: str,
     current_time_ct: str,
+    earliest_acceptable_date: str | None = None,
 ) -> dict[str, Any]:
     """Run the Sr. Editor review.
 
     Args:
-        newsletter: the audience slug (matches briefs/<slug>.json)
+        newsletter: 'ledger' | 'pulse' | 'download'
         story_payload: The structured story output from the main agent.
         today_date_iso: Current date as 'YYYY-MM-DD'. Injected into the
             editor's system prompt so it doesn't misread current-year URLs
             as fabricated future dates (its training cutoff is earlier).
         current_time_ct: Current time as 'HH:MM CT' (e.g. '22:14 CT').
             Paired with today_date_iso to give the editor full now-context.
+        earliest_acceptable_date: The freshness cutoff the agent actually used,
+            as 'YYYY-MM-DD'. MUST mirror the agent's floor or the editor will
+            flag stories the agent legitimately included. Defaults to the shared
+            freshness_floor when not supplied (e.g. from the eval harness).
 
     Returns:
         {
@@ -218,21 +224,35 @@ def review(
     """
     import anthropic  # lazy import — see top-of-module note
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=6)
-    import json as _json
-    from pathlib import Path as _Path
-    _spec_p = _Path(__file__).resolve().parent.parent / "briefs" / f"{newsletter}.json"
-    display_name = newsletter.replace("-", " ").title()
-    if _spec_p.exists():
-        display_name = _json.loads(_spec_p.read_text()).get("display_name", display_name)
+    display_name = {
+        "ledger": "Ledger",
+        "pulse": "Pulse",
+        "download": "Download",
+    }.get(newsletter, newsletter.capitalize())
+
+    # Audience label for the prompt's implications-framing guidance. Pack
+    # newsletters configure it (config/audiences/); platform audiences fall
+    # back to their spec's category_main, then the display name.
+    from scripts import audience_config
+    team_name = audience_config.editor_team_name(newsletter)
+    if not team_name:
+        import json as _json
+        from pathlib import Path as _Path
+        spec_path = _Path(__file__).resolve().parent.parent / "briefs" / f"{newsletter}.json"
+        if spec_path.exists():
+            team_name = _json.loads(spec_path.read_text()).get("category_main")
+    team_name = team_name or display_name
 
     current_year = today_date_iso.split("-", 1)[0]
-    # Compute EARLIEST_ACCEPTABLE_DATE (today minus 3 days) so editor can
-    # check freshness numerically, not just by year.
-    from datetime import date, timedelta
-    _y, _m, _d = (int(x) for x in today_date_iso.split("-"))
-    earliest_acceptable_date = (date(_y, _m, _d) - timedelta(days=3)).isoformat()
+    # EARLIEST_ACCEPTABLE_DATE must mirror the agent's freshness floor, else the
+    # editor flags stories the agent legitimately included. Use the caller's exact
+    # value; fall back to the shared freshness_floor (single source of truth).
+    if earliest_acceptable_date is None:
+        from scripts.freshness import freshness_floor
+        earliest_acceptable_date = freshness_floor(today_date_iso).isoformat()
     system_prompt = EDITOR_SYSTEM_PROMPT.format(
         newsletter_name=display_name,
+        team_name=team_name,
         today_date_iso=today_date_iso,
         current_time_ct=current_time_ct,
         current_year=current_year,

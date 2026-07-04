@@ -18,8 +18,8 @@ Two modes:
                                  falls back to source_excerpt if a fetch fails)
 
 Usage:
-  python -m scripts.build_review --from-input review/ai-pms-ranked.json --out review.html
-  python -m scripts.build_review --from-input review/ai-pms-ranked.json --out review.html
+  python -m scripts.build_review --bundle review/sample-bundle.json --out review.html
+  python -m scripts.build_review --from-input review/pending/pulse.json --out review.html
 """
 
 from __future__ import annotations
@@ -29,6 +29,8 @@ import json
 import sys
 from html import escape
 from pathlib import Path
+
+from scripts.render_html import coerce_excerpt, _safe_url
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -43,40 +45,62 @@ def build_bundle_from_payload(payload_path: Path) -> dict:
     raw = json.loads(payload_path.read_text())
     content = raw.get("content", raw)  # fixture wraps in {content, meta}; raw payload is flat
     meta = raw.get("meta", {})
-    stories = []
-    for s in content.get("top_stories", []):
-        url = s.get("source_url", "")
-        article_text, article_title, fetched = "", "", False
-        if url:
-            try:
-                from scripts.tools import web_fetch  # lazy — needs network
-                r = web_fetch.fetch(url)
-                article_text = r.get("body_text", "") or ""
-                article_title = r.get("title", "") or ""
-                fetched = bool(article_text)
-            except Exception as e:  # noqa: BLE001 — review must never crash on a fetch
-                print(f"[review] fetch failed for {url}: {e}", file=sys.stderr)
-        if not fetched:
-            article_text = (
-                "[Could not fetch the live article — showing the quoted excerpt as a "
-                "stand-in. Open the source link to read the full piece.]\n\n"
-                + s.get("source_excerpt", "")
-            )
-        stories.append({
-            "headline": s.get("headline", ""),
-            "track": s.get("track", ""),
-            "summary": s.get("summary", ""),
-            "implications": s.get("implications", []) or [],
-            "source_excerpt": s.get("source_excerpt", ""),
-            "source_url": url,
-            "article_title": article_title,
-            "article_text": article_text,
-            "fetched": fetched,
-        })
+    stories = [_story_entry(s) for s in content.get("top_stories", [])]
+    # Bench reserves get the SAME article-fetch treatment as top stories, so a
+    # promoted reserve shows its original article in the console (content-flow C).
+    bench = [_story_entry(s) for s in content.get("bench", []) or []]
+    other = [{
+        "headline": o.get("headline", ""),
+        "subtitle": o.get("subtitle", ""),
+        "track": o.get("track", ""),
+        "source_url": o.get("source_url", ""),
+    } for o in content.get("other_news", []) or []]
     return {
         "newsletter": raw.get("newsletter", meta.get("newsletter", "")),
         "issue_number": meta.get("issue_number"),
         "stories": stories,
+        "bench": bench,
+        "other_news": other,
+        # Surface operational notes (e.g. a Top-3 floor shortfall) so the
+        # reviewer SEES them in the console, not just in CI logs.
+        "anomalies": content.get("anomalies", []) or [],
+    }
+
+
+def _story_entry(s: dict) -> dict:
+    """One full-story review entry: prefer the article body the agent captured
+    during the run (robust to paywalls/link-rot); only re-fetch when the payload
+    predates that; fall back to the excerpt so review never blocks on a fetch."""
+    url = s.get("source_url", "")
+    article_text = s.get("article_text", "") or ""
+    article_title = s.get("article_title", "") or ""
+    fetched = bool(article_text)
+    if not fetched and url:
+        try:
+            from scripts.tools import web_fetch  # lazy — needs network
+            r = web_fetch.fetch(url)
+            article_text = r.get("body_text", "") or ""
+            article_title = r.get("title", "") or ""
+            fetched = bool(article_text)
+        except Exception as e:  # noqa: BLE001 — review must never crash on a fetch
+            print(f"[review] fetch failed for {url}: {e}", file=sys.stderr)
+    if not fetched:
+        article_text = (
+            "[Could not fetch the live article — showing the quoted excerpt as a "
+            "stand-in. Open the source link to read the full piece.]\n\n"
+            + coerce_excerpt(s.get("source_excerpt"))
+        )
+    return {
+        "headline": s.get("headline", ""),
+        "track": s.get("track", ""),
+        "summary": s.get("summary", ""),
+        "implications": s.get("implications", []) or [],
+        "source_excerpt": coerce_excerpt(s.get("source_excerpt")),
+        "source_url": url,
+        "hero_image_url": s.get("hero_image_url") or "",
+        "article_title": article_title,
+        "article_text": article_text,
+        "fetched": fetched,
     }
 
 
@@ -178,7 +202,7 @@ REVIEW_JS = """
 
 def _highlight_excerpt(article_text: str, excerpt: str) -> str:
     """Escape the article, then highlight the first source_excerpt sentence
-    where it appears so the reviewer can spot the quoted passage in context."""
+    where it appears so David can spot the quoted passage in context."""
     art = escape(article_text)
     # Use the longest excerpt sentence as the anchor (robust to minor edits).
     anchor = max((p.strip() for p in excerpt.split(".")), key=len, default="").strip()
@@ -189,44 +213,123 @@ def _highlight_excerpt(article_text: str, excerpt: str) -> str:
     return art.replace("\n", "<br>")
 
 
-def render_review_html(bundle: dict) -> str:
-    stories = bundle.get("stories", [])
-    issue = bundle.get("issue_number")
-    nl = bundle.get("newsletter", "")
-    title = f"Review — {nl or 'newsletter'}" + (f" #{issue:03d}" if isinstance(issue, int) else "")
+def _srcurl_html(source_url) -> str:
+    """A source link the reviewer can open — but gated to http(s). source_url
+    comes from the scraping agent, so a javascript:/data: URL would be a live
+    click in the console. Show the raw URL as text either way; link only if safe."""
+    disp = escape(source_url or "")
+    safe = _safe_url(source_url)
+    if safe:
+        return f'<a href="{escape(safe)}" target="_blank" rel="noopener">{disp}</a>'
+    return f'<span class="unsafe-url" title="non-http(s) URL — not linked">{disp}</span>'
 
-    cards = []
-    for i, s in enumerate(stories, 1):
-        impl = "".join(
-            f'<li data-component="story-{i}.implication-{j}">{escape(x)}</li>'
-            for j, x in enumerate(s["implications"], 1)
-        )
-        fetch_note = "" if s.get("fetched") else (
-            '<div class="warn">⚠ live article not fetched — excerpt shown as stand-in</div>'
-        )
-        article_html = _highlight_excerpt(s["article_text"], s["source_excerpt"])
-        cards.append(f"""
-<section class="card" data-component="story-{i}">
+
+def _render_story_card(prefix: str, i: int, s: dict, ce: str) -> str:
+    """Full-story review card (Top stories AND bench reserves share this shape).
+    `prefix` drives the data-component ids (story-N / bench-N) the JS + approve
+    logic key off of."""
+    impl = "".join(
+        f'<li data-component="{prefix}-{i}.implication-{j}"{ce}>{escape(x)}</li>'
+        for j, x in enumerate(s.get("implications") or [], 1)
+    )
+    fetch_note = "" if s.get("fetched") else (
+        '<div class="warn">⚠ live article not fetched — excerpt shown as stand-in</div>'
+    )
+    article_html = _highlight_excerpt(s.get("article_text", ""), s.get("source_excerpt", ""))
+    # Hero preview — only the Big Signal (Story 01) is illustrated, matching the
+    # email. Show its image so it can be reviewed; call out a missing/rejected one.
+    # Lower top stories, bench, and Other News are text-only (no hero block).
+    hero_html = ""
+    if prefix == "story" and i == 1:
+        hero = _safe_url(s.get("hero_image_url"))
+        hero_html = (f'<img class="hero" src="{escape(hero)}" alt="" loading="lazy">'
+                     if hero else '<div class="nohero">no hero image</div>')
+    return f"""
+<section class="card" data-component="{prefix}-{i}">
   <div class="cardhead"><span class="num">{i:02d}</span>
-    <span class="track">{escape(s['track'])}</span></div>
+    <span class="track">{escape(s.get('track',''))}</span></div>
   <div class="cols">
     <div class="pane left">
       <div class="panetag">OUR DRAFT</div>
-      <h2 data-component="story-{i}.headline">{escape(s['headline'])}</h2>
-      <p class="summary" data-component="story-{i}.summary">{escape(s['summary'])}</p>
+      {hero_html}
+      <h2 data-component="{prefix}-{i}.headline"{ce}>{escape(s.get('headline',''))}</h2>
+      <p class="summary" data-component="{prefix}-{i}.summary"{ce}>{escape(s.get('summary',''))}</p>
       <div class="label">Implications</div>
       <ul class="impl">{impl}</ul>
       <div class="label">Quoted source excerpt</div>
-      <blockquote data-component="story-{i}.excerpt">{escape(s['source_excerpt'])}</blockquote>
+      <blockquote data-component="{prefix}-{i}.excerpt"{ce}>{escape(s.get('source_excerpt',''))}</blockquote>
     </div>
     <div class="pane right">
       <div class="panetag">ORIGINAL ARTICLE</div>
       {fetch_note}
-      <div class="srcurl"><a href="{escape(s['source_url'])}" target="_blank" rel="noopener">{escape(s['source_url'])}</a></div>
-      <div class="article" data-component="story-{i}.article">{article_html}</div>
+      <div class="srcurl">{_srcurl_html(s.get('source_url'))}</div>
+      <div class="article" data-component="{prefix}-{i}.article">{article_html}</div>
     </div>
   </div>
-</section>""")
+</section>"""
+
+
+def _render_other_card(i: int, o: dict, ce: str) -> str:
+    """Lightweight Other-News review card — headline + one-line subtitle + source.
+    No article pane, implications, or excerpt (Other News is scan-only)."""
+    return f"""
+<section class="card othercard" data-component="other-{i}">
+  <div class="cardhead"><span class="num">O{i:02d}</span>
+    <span class="track">{escape(o.get('track',''))}</span></div>
+  <div class="pane left onepane">
+    <div class="panetag">OTHER NEWS</div>
+    <h2 data-component="other-{i}.headline"{ce}>{escape(o.get('headline',''))}</h2>
+    <p class="summary" data-component="other-{i}.subtitle"{ce}>{escape(o.get('subtitle',''))}</p>
+    <div class="srcurl">{_srcurl_html(o.get('source_url'))}</div>
+  </div>
+</section>"""
+
+
+def render_review_html(bundle: dict, editable: bool = False) -> str:
+    stories = bundle.get("stories", [])
+    issue = bundle.get("issue_number")
+    nl = bundle.get("newsletter", "")
+    title = f"Review — {nl or 'newsletter'}" + (f" #{issue:03d}" if isinstance(issue, int) else "")
+    # In edit mode, the left-pane draft components become directly editable;
+    # the instruct/feedback layer is omitted (you edit, you don't annotate).
+    ce = ' contenteditable="true" spellcheck="true"' if editable else ''
+
+    # Loud banner for operational anomalies (Top-3 shortfall, dropped items,
+    # blocked URLs). Content-flow A logs these; the reviewer must actually see them.
+    anomalies = bundle.get("anomalies") or []
+    anomalies_html = ""
+    if anomalies:
+        _items = "".join(f"<li>{escape(str(a))}</li>" for a in anomalies)
+        anomalies_html = (
+            f'<div class="anomalies" role="alert">'
+            f'<div class="anomalies-h">&#9888; {len(anomalies)} anomaly note(s) — review before sending</div>'
+            f'<ul>{_items}</ul></div>'
+        )
+
+    cards = [_render_story_card("story", i, s, ce) for i, s in enumerate(stories, 1)]
+    bench = bundle.get("bench") or []
+    if bench:
+        cards.append('<div class="sectionhead">Bench &mdash; reserves '
+                     '(auto-promoted if you drop a Top story; edit or drop them here too)</div>')
+        cards += [_render_story_card("bench", i, s, ce) for i, s in enumerate(bench, 1)]
+    other = bundle.get("other_news") or []
+    if other:
+        cards.append('<div class="sectionhead">Other News &mdash; scan items (edit or drop)</div>')
+        cards += [_render_other_card(i, o, ce) for i, o in enumerate(other, 1)]
+
+    edit_css = (
+        "\n  .pane.left [data-component]{outline:1px dashed transparent; border-radius:3px; transition:outline-color .1s;}"
+        "\n  .pane.left [data-component]:hover{outline-color:#3a3f4d;}"
+        "\n  .pane.left [data-component]:focus{outline:1px solid var(--accent); background:rgba(124,156,255,.06);}"
+    ) if editable else ""
+    sub_html = (
+        f"Side-by-side review &middot; {len(stories)} stories &middot; <b>edit any part of the draft (left) directly</b>, "
+        "then approve &mdash; your edits are what gets sent."
+        if editable else
+        "Side-by-side review &middot; our draft (left) vs. original article (right). "
+        "Highlighted = the passage we quoted &middot; <b>click any part of our draft to leave an instruction</b>."
+    )
+    interactive = "" if editable else f"{FEEDBACK_HTML}\n<script>{REVIEW_JS}</script>"
 
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -267,16 +370,26 @@ def render_review_html(bundle: dict) -> str:
               padding-right:8px; }}
   .article mark {{ background:var(--mark); color:#111; padding:0 2px; }}
   .warn {{ font-size:12px; color:#ffb454; margin-bottom:8px; }}
+  .anomalies {{ background:rgba(255,120,80,.12); border:1px solid #ff7850; border-radius:8px;
+                padding:12px 16px; margin-bottom:20px; color:#ffcab0; font-size:13px; }}
+  .anomalies-h {{ font-weight:700; margin-bottom:6px; color:#ff9d7a; }}
+  .anomalies ul {{ margin:0; padding-left:18px; }}
+  .sectionhead {{ font-size:12px; font-weight:700; letter-spacing:.14em; text-transform:uppercase;
+                  color:var(--mut); margin:8px 2px 14px; padding-top:6px; border-top:1px solid var(--line); }}
+  .othercard .onepane {{ border-right:none; }}
+  .hero {{ display:block; width:100%; max-width:100%; height:auto; border-radius:6px;
+           margin-bottom:12px; background:#0b0d12; border:1px solid var(--line); }}
+  .nohero {{ font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--mut);
+             border:1px dashed var(--line); border-radius:6px; padding:14px; text-align:center; margin-bottom:12px; }}
   @media (max-width:900px) {{ .cols {{ grid-template-columns:1fr; }}
                               .pane.left {{ border-right:none; border-bottom:1px solid var(--line); }} }}
-{REVIEW_CSS_EXTRA}
+{REVIEW_CSS_EXTRA}{edit_css}
 </style></head>
 <body>
 <header><h1>{escape(title)}</h1>
-<div class="sub">Side-by-side review · {len(stories)} stories · our draft (left) vs. original article (right). Highlighted = the passage we quoted · <b>click any part of our draft to leave an instruction</b>.</div></header>
-<main>{''.join(cards)}</main>
-{FEEDBACK_HTML}
-<script>{REVIEW_JS}</script>
+<div class="sub">{sub_html}</div></header>
+<main>{anomalies_html}{''.join(cards)}</main>
+{interactive}
 </body></html>"""
 
 
