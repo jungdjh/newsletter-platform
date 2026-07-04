@@ -2,8 +2,8 @@
 
 The loop:
 1. Sends the newsletter prompt + run context to Claude.
-2. Claude calls tools (web_search [server-side], web_fetch, og_image_check)
-   until it has enough to assemble the content.
+2. Claude calls tools (web_search [server-side], web_fetch, og_image_check,
+   notion_feedback) until it has enough to assemble the content.
 3. Returns a structured payload Claude emits as its final assistant turn.
 
 Web search is Anthropic's server-side `web_search_20250305` tool — runs on
@@ -24,7 +24,8 @@ The expected final-output shape (Claude is instructed to produce this JSON):
           "dateline": "Cupertino · Brussels",
           "hero_image_url": "https://..." | null,
           "source_url": "https://...",
-          "implications": ["...", "..."]  # 2 bullets
+          "korean_takeaway": "..." | null,   # Ledger + Pulse only
+          "implications": ["...", "...", "..."]  # 2 EN bullets, + 1 KO for Ledger/Pulse
       }, ...],
       "watchlist": [{"tag": "Filing", "headline": "...", "source": "..."}, ...],
       "also_noted": [{"headline": "...", "source": "..."}, ...],
@@ -43,7 +44,7 @@ from urllib.parse import urlparse
 
 import anthropic
 
-from .tools import web_fetch, og_image, feeds as feed_ingest
+from .tools import web_fetch, og_image, notion_client, feeds as feed_ingest
 from .compact_prompts import make_compact_prompt, get_sources, get_feeds
 
 # Source-quality blocklist for the server-side web_search tool. Press-release
@@ -88,7 +89,7 @@ SLEEP_BETWEEN_TURNS_SEC = 12
 SDK_MAX_RETRIES = 6
 # Cap per-turn output. Sonnet rarely uses >2K tokens for tool-use turns;
 # 4096 is plenty and cuts ~5-15 sec of generation time per turn vs 8192.
-MAX_RESPONSE_TOKENS = 8192  # payloads with source_excerpt across 3 stories can be large; 8192 avoids mid-serialization truncation
+MAX_RESPONSE_TOKENS = 8192  # bumped 2026-05-25 from 4096 — Ledger/Pulse payloads with source_excerpt + korean_takeaway across 3 stories were occasionally truncating mid-serialization
 
 # Tier-1 baseline allowlist — broad-coverage outlets unioned into EVERY audience's
 # allowlist (in build_tool_schemas) so a genuinely consequential story isn't missed
@@ -199,6 +200,21 @@ _STATIC_TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "notion_get_feedback",
+        "description": (
+            "Fetch recent reader feedback for this newsletter since a cutoff "
+            "timestamp. Use this to inform tone or topic choices."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "newsletter": {"type": "string", "enum": ["ledger", "pulse", "download"]},
+                "since_iso": {"type": "string", "description": "ISO 8601 timestamp."},
+            },
+            "required": ["newsletter", "since_iso"],
+        },
+    },
+    {
         "name": "submit_newsletter",
         "description": (
             "Submit the final structured newsletter payload. Call this ONCE "
@@ -246,10 +262,18 @@ _STATIC_TOOL_SCHEMAS = [
                             "implications": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Exactly 2 bullets. 8-14 words each. Concrete strategic moves for the audience."
+                                "description": "Exactly 2 English bullets. 8-14 words each. Concrete strategic moves for the reader/audience."
+                            },
+                            "korean_takeaway": {
+                                "type": ["string", "null"],
+                                "description": (
+                                    "Ledger + Pulse ONLY (omit / null for Download). 1-2 short Korean lines, "
+                                    "명사형 종결 (~됨, ~함, ~임), 개조식. Tone: 전략기획팀 수석 컨설턴트가 임원진 보고용으로 작성. "
+                                    "≤ 80 chars total. Captures the executive-briefing essence of the story for Korean-native readers."
+                                ),
                             },
                         },
-                        "required": ["headline", "summary", "track", "published_at", "dateline", "source_url", "source_excerpt", "implications"],
+                        "required": ["headline", "summary", "track", "published_at", "dateline", "source_url", "source_excerpt", "implications", "korean_takeaway"],
                     },
                     "minItems": 1,
                     "maxItems": 3,
@@ -294,6 +318,27 @@ _STATIC_TOOL_SCHEMAS = [
 ]
 
 
+# Bench: reserve stories the agent drafts alongside the Top 3, so the reviewer
+# can backfill a dropped top story without a regenerate. Same full-story shape
+# as top_stories (reuse the exact item object — DRY, and it stays in sync).
+for _t in _STATIC_TOOL_SCHEMAS:
+    if _t.get("name") == "submit_newsletter":
+        _submit_props = _t["input_schema"]["properties"]
+        _submit_props["bench"] = {
+            "type": "array",
+            "description": (
+                "Up to 3 RESERVE stories, ranked best-first, same full shape as "
+                "top_stories. Held back so the reviewer can backfill a dropped top "
+                "story without regenerating. Draft real, verified reserves from your "
+                "next-strongest candidates — never filler. Omit or leave empty on a "
+                "thin news day; never invent a reserve to hit the count."
+            ),
+            "items": _submit_props["top_stories"]["items"],
+            "maxItems": 3,
+        }
+        break
+
+
 def build_tool_schemas(allowed_domains: list[str] | None = None) -> list[dict[str, Any]]:
     """Assemble the agent's tool list for one run.
 
@@ -315,6 +360,10 @@ def build_tool_schemas(allowed_domains: list[str] | None = None) -> list[dict[st
     else:
         web_search["blocked_domains"] = WEB_SEARCH_BLOCKED_DOMAINS
     return [web_search] + _STATIC_TOOL_SCHEMAS
+
+
+from scripts.freshness import freshness_floor  # noqa: E402 — cadence-aware cutoff
+from scripts.sent_ledger import covered_block as _covered_block  # noqa: E402 — no-repeat ledger
 
 
 def run_agent(
@@ -365,8 +414,7 @@ def run_agent(
     # feeds (client-side — reaches outlets web_search can't crawl; web_fetch reads them).
     # Injected as LEADS into the opening message; the agent must web_fetch to verify.
     # Robust: dead feeds are skipped, never abort the run.
-    from datetime import date as _fdate, timedelta as _ftimedelta
-    _feed_earliest = _fdate.fromisoformat(today_date_iso) - _ftimedelta(days=3)
+    _feed_earliest = freshness_floor(today_date_iso, state.get("last_run_at"))
     feed_block = ""
     feed_urls = get_feeds(newsletter)
     if feed_urls:
@@ -406,17 +454,23 @@ def run_agent(
         {
             "role": "user",
             "content": (
-                f"Generate today's newsletter issue. The brief is in the system message above. "
+                f"Generate today's newsletter issue. The full SKILL.md prompt is in the system message above. "
                 f"Today: {today_date_iso}. Issue number to assign: {issue_number}. "
                 f"Last run: {state.get('last_run_at', 'never')}. "
-                f"\n\nResearch news across the use-case tracks, then assemble the Top Stories + Other News, "
-                f"then call submit_newsletter ONCE with the complete payload."
+                f"Last feedback check: {state.get('last_feedback_check_at', 'never')}. "
+                f"\n\nBegin by checking recent feedback (notion_get_feedback), then research news across the use-case tracks, "
+                f"then assemble the Top 3 + watchlist + also-noted, then call submit_newsletter ONCE with the complete payload."
                 + feed_block
+                + _covered_block(newsletter)
             ),
         }
     ]
 
     final_payload: dict[str, Any] | None = None
+    # Stash article bodies the agent fetches, keyed by URL, so the review
+    # console's right pane shows what the agent actually read instead of
+    # re-fetching at review time (which breaks on paywalls / link-rot).
+    fetched_bodies: dict[str, dict[str, Any]] = {}
 
     def _create_response():
         """messages.create with self-healing allowlist pruning. If web_search
@@ -477,6 +531,12 @@ def run_agent(
             tinput = tu.input
             try:
                 result = _execute_tool(name, tinput, newsletter)
+                if name == "web_fetch" and isinstance(result, dict):
+                    # Key on both requested and post-redirect URL so the later
+                    # source_url lookup hits regardless of redirects.
+                    for k in (result.get("url"), result.get("final_url")):
+                        if k:
+                            fetched_bodies[k] = result
                 if name == "submit_newsletter":
                     final_payload = result
                     tool_results.append({
@@ -501,9 +561,39 @@ def run_agent(
         messages.append({"role": "user", "content": tool_results})
 
         if final_payload is not None:
+            _attach_article_bodies(final_payload, fetched_bodies)
             return final_payload
 
     raise RuntimeError(f"Agent did not submit a payload within {MAX_AGENT_TURNS} turns.")
+
+
+def _norm_url(u: str) -> str:
+    """Canonicalize a URL for matching: drop query/fragment + trailing slash,
+    lowercase scheme/host. The agent often fetches a tracking URL
+    (…/slug/?utm_campaign=…) but submits the cleaned source_url (…/slug/), so
+    exact-key lookups miss without this."""
+    p = urlparse(u or "")
+    return f"{p.scheme.lower()}://{p.netloc.lower()}{p.path.rstrip('/')}"
+
+
+def _attach_article_bodies(
+    payload: dict[str, Any], fetched_bodies: dict[str, dict[str, Any]]
+) -> None:
+    """Embed the fetched article body + title into each top story (by source_url)
+    so the review console can render the original article without re-fetching.
+    Exact-URL match first, then a query/slash-normalized fallback.
+    setdefault: never clobber a body the agent already supplied."""
+    norm_index: dict[str, dict[str, Any]] = {}
+    for key, body in fetched_bodies.items():
+        norm_index.setdefault(_norm_url(key), body)
+    # Top stories AND bench reserves — the console renders the original article
+    # for whichever a reviewer promotes, so both need their bodies attached.
+    for story in (payload.get("top_stories") or []) + (payload.get("bench") or []):
+        url = story.get("source_url", "")
+        hit = fetched_bodies.get(url) or norm_index.get(_norm_url(url))
+        if hit:
+            story.setdefault("article_text", hit.get("body_text", "") or "")
+            story.setdefault("article_title", hit.get("title", "") or "")
 
 
 def _build_dynamic_context(
@@ -519,9 +609,8 @@ def _build_dynamic_context(
     request — it's intentionally placed after the cache_control breakpoint so
     the static brief (~2K tokens) stays cached across the full agent loop.
     """
-    from datetime import datetime, timedelta
-    today_dt = datetime.fromisoformat(today_date_iso)
-    earliest_acceptable_date = (today_dt - timedelta(days=3)).strftime("%Y-%m-%d")
+    earliest_acceptable_date = freshness_floor(
+        today_date_iso, state.get("last_run_at")).strftime("%Y-%m-%d")
     parts = [
         "## Today's run context",
         f"- TODAY: {today_date_iso}",
@@ -577,6 +666,64 @@ def _build_feed_block(candidates: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+# The submit_newsletter top-story schema fields (see build_tool_schemas above).
+# Any key on a story dict outside this set is a json-repair fragmentation
+# artifact: when the model double-serializes top_stories as a JSON string with
+# unescaped quotes inside source_excerpt, the tolerant parser tears the excerpt
+# at the stray quote and reinterprets the trailing verbatim text as bogus
+# sibling keys (e.g. "low-quality,", "low-effort,"). The Sr. Editor then flags
+# the story as "excerpt split across multiple keys."
+_TOP_STORY_KEYS = frozenset({
+    "headline", "summary", "track", "published_at", "dateline",
+    "hero_image_url", "source_url", "source_excerpt", "implications",
+    "korean_takeaway",
+})
+
+
+def _sanitize_top_stories(stories: Any) -> Any:
+    """Repair json-repair source_excerpt fragmentation in a top_stories list.
+
+    Pulled out as a pure function so it can be unit-tested without the API
+    (mirrors sr_editor.parse_editor_response). For each story dict: re-join any
+    fragmentation-artifact keys back into source_excerpt (best-effort — recovers
+    the verbatim tail json-repair tore off at an unescaped quote) and coerce
+    source_excerpt to a single clean string. The stray keys are dropped so the
+    payload is clean before it reaches the Sr. Editor and the renderer. Non-dict
+    items and non-list input pass through untouched.
+    """
+    import sys as _sys
+    from scripts.render_html import coerce_excerpt
+    if not isinstance(stories, list):
+        return stories
+    for story in stories:
+        if not isinstance(story, dict):
+            continue
+        bogus = [k for k in story if k not in _TOP_STORY_KEYS]
+        excerpt = coerce_excerpt(story.get("source_excerpt"))
+        if bogus:
+            salvage: list[str] = []
+            for k in bogus:
+                salvage.append(str(k))
+                salvage.append(coerce_excerpt(story.pop(k)))
+            tail = " ".join(p for p in salvage if p)
+            if tail:
+                excerpt = f"{excerpt} {tail}".strip()
+            print(
+                f"[agent_loop] WARN: story '{str(story.get('headline', ''))[:50]}' had "
+                f"{len(bogus)} fragmented excerpt key(s) {bogus} from json-repair — "
+                f"re-joined into source_excerpt.",
+                file=_sys.stderr,
+            )
+        story["source_excerpt"] = excerpt
+        # Normalize implications to a list at ingestion: the model can emit
+        # `null` (schema is advisory) or json-repair can null it out. Renderers
+        # coerce too, but keeping the saved payload clean protects every
+        # downstream consumer (replay, review console, feedback).
+        if not isinstance(story.get("implications"), list):
+            story["implications"] = []
+    return stories
+
+
 def _execute_tool(name: str, tinput: dict[str, Any], newsletter: str) -> Any:
     # web_search is server-side now — Anthropic handles invocation and we never
     # see a tool_use block for it. Only client-side tools below.
@@ -601,6 +748,11 @@ def _execute_tool(name: str, tinput: dict[str, Any], newsletter: str) -> Any:
         if verdict is False:
             return {"verdict": "reject"}
         return {"verdict": "skip", "reason": "image too large, unfetchable, or vision check failed"}
+    if name == "notion_get_feedback":
+        return notion_client.get_recent_feedback(
+            tinput.get("newsletter", newsletter),
+            tinput["since_iso"],
+        )
     if name == "submit_newsletter":
         # Defensive: under complex schemas the model occasionally serializes
         # array fields as JSON strings instead of native arrays. Worse, the
@@ -612,7 +764,7 @@ def _execute_tool(name: str, tinput: dict[str, Any], newsletter: str) -> Any:
         import sys as _sys
         from json_repair import repair_json as _repair_json
         payload = dict(tinput)  # shallow copy
-        for k in ("top_stories", "other_news", "anomalies"):
+        for k in ("top_stories", "other_news", "anomalies", "bench"):
             v = payload.get(k)
             if isinstance(v, str):
                 try:
@@ -638,5 +790,15 @@ def _execute_tool(name: str, tinput: dict[str, Any], newsletter: str) -> Any:
                 print(f"[agent_loop]   head: {head}", file=_sys.stderr)
                 if tail:
                     print(f"[agent_loop]   tail: ...{tail}", file=_sys.stderr)
+        # json-repair (or the model) can leave source_excerpt fragmented across
+        # stray sibling keys when verbatim article quotes weren't escaped — e.g.
+        # "low-quality," "low-effort," become bogus keys. Re-join them into one
+        # clean source_excerpt string BEFORE the payload reaches the Sr. Editor
+        # (which flags the fragmentation) and the renderer.
+        if "top_stories" in payload:
+            payload["top_stories"] = _sanitize_top_stories(payload["top_stories"])
+        # Bench reserves are full-story shape too — same excerpt-fragmentation repair.
+        if "bench" in payload:
+            payload["bench"] = _sanitize_top_stories(payload["bench"])
         return payload
     raise ValueError(f"Unknown tool: {name}")

@@ -1,4 +1,5 @@
 anthropic>=0.40.0
+notion-client>=2.2.1
 requests>=2.32.0
 feedparser>=6.0.0
 readability-lxml>=0.8.1

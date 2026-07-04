@@ -2,13 +2,14 @@
 """Brief generator — the platform core.
 
 Turns an audience description ("AI PMs", "nursing students") into a compact
-operational brief the agent loop can run.
+operational brief the existing agent loop can run — same shape as the
+hand-written DOWNLOAD/LEDGER/PULSE briefs in compact_prompts.py.
 
-A brief = VARIABLE parts (audience, relevance gate, tracks, geography, tone)
-wrapped around a FIXED engine contract (output buckets, field schemas, fact
-discipline). The LLM generates the variable spec; assemble_brief templates it
-into the fixed contract. This is what makes the system a *platform*: any
-audience description in, a tailored brief out.
+A brief = VARIABLE parts (audience, relevance gate, tracks, geography, tone,
+Korean?) wrapped around a FIXED engine contract (output buckets, field
+schemas, fact discipline). The LLM generates the variable spec; assemble_brief
+templates it into the fixed contract. This is what makes the system a
+*platform* instead of three hardcoded newsletters.
 
 Two functions:
   generate_brief_spec(audience) -> dict   # 1 LLM call; needs ANTHROPIC_API_KEY
@@ -33,11 +34,11 @@ SPEC_SCHEMA = {
     "type": "object",
     "required": ["slug", "display_name", "category_main", "subtitle",
                  "implications_label", "footer_tagline", "theme", "audience", "in_scope",
-                 "out_scope", "sources", "relevance_gate", "tracks", "geography", "tone"],
+                 "out_scope", "sources", "relevance_gate", "tracks", "geography", "wants_korean", "tone"],
     "properties": {
         "slug": {"type": "string", "description": "lowercase-hyphen id, e.g. 'ai-pms'"},
         "display_name": {"type": "string", "description": "masthead wordmark, e.g. 'The AI PM Brief'"},
-        "category_main": {"type": "string", "description": "short category label, e.g. 'AI Product'"},
+        "category_main": {"type": "string", "description": "short category label, e.g. 'AI Product'. NEVER an employer name."},
         "category_sub": {"type": "string", "description": "category suffix, default 'Intel'"},
         "subtitle": {"type": "string", "description": "one-line tagline under the wordmark, e.g. 'The intelligence brief on models, agents & shipping AI products'"},
         "implications_label": {"type": "string", "description": "label for the implications block, e.g. 'For AI PMs'"},
@@ -62,11 +63,12 @@ SPEC_SCHEMA = {
                    "items": {"type": "object", "required": ["name", "desc"],
                              "properties": {"name": {"type": "string"}, "desc": {"type": "string"}}}},
         "geography": {"type": "string", "description": "e.g. 'US-first', 'Global', 'UK-first'"},
+        "wants_korean": {"type": "boolean", "description": "true only if the audience is Korean-native or bilingual"},
         "self_coverage": {"type": ["string", "null"], "description": "the audience's own product/org to exclude as self-coverage, or null"},
         "tone": {"type": "string", "description": "1 sentence on voice, e.g. 'direct, practitioner-to-practitioner, no hype'"},
         "theme": {
             "type": "object",
-            "description": "Brand colors fitting THIS audience — a distinct visual identity. Pick colors that feel right for the field (e.g. indigo/violet for AI/tech, warm clinical green for nursing).",
+            "description": "Brand colors fitting THIS audience — a distinct visual identity of its own, not borrowed from another brand. Pick colors that feel right for the field (e.g. indigo/violet for AI/tech, warm clinical green for nursing).",
             "required": ["bg_dark", "primary", "accent"],
             "properties": {
                 "bg_dark": {"type": "string", "description": "deep DARK hex for the masthead/big-signal/footer backdrop (white text sits on it), e.g. '#13122B'"},
@@ -84,7 +86,7 @@ _OUTPUT_CONTRACT = """\
 
 1. **Top Stories** — 1, 2, OR 3 entries. Cap 3, floor 1. First is the Big
    Signal. Each gets full treatment: track, dateline, hero image
-   (vision-checked), headline, summary, source_excerpt, 2 implications, source URL.
+   (vision-checked), headline, summary, source_excerpt, 2 implications, {kr}source URL.
 2. **Other news** — 0 to 5 scan-only items. Each: track, headline, subtitle
    (one-line dek), source_url. NO summary, NO implications, NO hero."""
 
@@ -121,7 +123,7 @@ _FIELDS_BASE = """\
   facts your summary + implications rest on. Copy-paste, do not paraphrase.
 - **implications**: exactly 2 bullets, 8-14 words each. Concrete moves for
   the audience — no periods at end.
-
+{korean_field}
 ## Other News item fields (scan-only — MUST each fit ONE line)
 - **track**, **headline** (6-9 words, fits one line), **subtitle** (<= 11 words,
   fits one line — no second clause that spills over), **source_url**
@@ -129,6 +131,11 @@ _FIELDS_BASE = """\
   Other News obeys the SAME freshness gate as Top Stories — if published_at is
   before EARLIEST_ACCEPTABLE_DATE, DROP the item. Do not include-and-flag stale
   items; just leave them out."""
+
+_KOREAN_FIELD = """\
+- **korean_takeaway**: REQUIRED. 1-2 short Korean lines, 명사형 종결, 개조식,
+  executive-briefing tone, <= 80 chars. Every Top Story has this.
+"""
 
 _QUERY_FRESHNESS = """\
 ## Query freshness — the search tool has NO date filter
@@ -140,6 +147,7 @@ EARLIEST_ACCEPTABLE_DATE."""
 
 def assemble_brief(spec: dict) -> str:
     """Pure: spec -> full compact brief string (engine-compatible). No API."""
+    kr = spec.get("wants_korean", False)
     tracks_line = " · ".join(t["name"] for t in spec["tracks"])
     tracks_block = "\n".join(f"- **{t['name']}**: {t['desc']}" for t in spec["tracks"])
     in_scope = "\n".join(f"- {x}" for x in spec["in_scope"])
@@ -151,6 +159,8 @@ def assemble_brief(spec: dict) -> str:
         f"analyst data, regulator action, independent adoption data).\n"
         if self_cov else ""
     )
+    korean_field = _KOREAN_FIELD if kr else ""
+    kr_treatment = "Korean takeaway, " if kr else ""
 
     sources = spec.get("sources") or []
     if sources:
@@ -188,9 +198,9 @@ If the honest answer is no, DROP the story.
 
 {tracks_block}
 
-{_OUTPUT_CONTRACT}
+{_OUTPUT_CONTRACT.format(kr=kr_treatment)}
 
-{_FIELDS_BASE}
+{_FIELDS_BASE.format(korean_field=korean_field)}
 
 {sources_block}## Geography priority
 Primary market: **{spec['geography']}**. A Top Story (especially the Big
@@ -220,6 +230,7 @@ def generate_brief_spec(audience: str) -> dict[str, Any]:
         "they'd cite — and deliberately leave OUT SEO/affiliate/blog-farm sites. "
         "For `feeds`, give best-guess canonical RSS/Atom feed URLs (full https) for the "
         "most important of those sources — these pre-fetch fresh article candidates. "
+        "Set wants_korean true ONLY for Korean-native/bilingual audiences. "
         "Return ONLY the JSON object."
     )
     resp = client.messages.create(
@@ -251,7 +262,8 @@ def main() -> int:
             print(f"[brief] wrote spec → {args.out}")
 
     brief = assemble_brief(spec)
-    print(f"[brief] {spec['display_name']} · {len(spec['tracks'])} tracks · {len(brief)} chars")
+    print(f"[brief] {spec['display_name']} · {len(spec['tracks'])} tracks · "
+          f"korean={spec.get('wants_korean')} · {len(brief)} chars")
     if args.print_brief or args.from_spec:
         print("\n" + "=" * 70 + "\n" + brief)
     return 0
