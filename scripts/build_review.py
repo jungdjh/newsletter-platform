@@ -19,7 +19,7 @@ Two modes:
 
 Usage:
   python -m scripts.build_review --bundle review/sample-bundle.json --out review.html
-  python -m scripts.build_review --from-input review/pending/pulse.json --out review.html
+  python -m scripts.build_review --from-input review/pending/<audience>.json --out review.html
 """
 
 from __future__ import annotations
