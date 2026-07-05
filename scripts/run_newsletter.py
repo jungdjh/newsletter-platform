@@ -1,22 +1,22 @@
 """Entry point: generate and send a newsletter end-to-end.
 
 Usage:
-    python scripts/run_newsletter.py --newsletter ledger|pulse|download
+    python scripts/run_newsletter.py --newsletter <audience>
                                       [--dry-run]
                                       [--to <email>]
                                       [--create-draft-only]
                                       [--save-html <path>]
 
 In production (GitHub Actions):
-    python scripts/run_newsletter.py --newsletter download
+    python scripts/run_newsletter.py --newsletter <audience>
 
 For first-week test runs (just operator + reviewer):
-    python scripts/run_newsletter.py --newsletter download \\
+    python scripts/run_newsletter.py --newsletter <audience> \\
         --to operator@example.com --to reviewer@example.com \\
         --create-draft-only
 
 For local dry runs (skip Gmail, just write HTML to disk):
-    python scripts/run_newsletter.py --newsletter download \\
+    python scripts/run_newsletter.py --newsletter <audience> \\
         --dry-run --save-html /tmp/out.html
 """
 
@@ -37,15 +37,13 @@ sys.path.insert(0, str(REPO_ROOT))
 # agent_loop, sr_editor, and notion/gmail tools are imported lazily inside
 # main() so that --from-payload + --skip-editor + --dry-run works locally
 # without ANTHROPIC_API_KEY or the anthropic SDK installed (zero-API replay).
-from scripts.render_html import render_newsletter, PALETTES  # noqa: E402
+from scripts.render_html import render_newsletter, _effective_palette  # noqa: E402
 
 
 # Sr. Editor is now ADVISORY, not a hard gate. The agent runs once. Editor
 # produces a concerns list that ships attached to the draft as a top banner
 # for human review. No regeneration loops — the human is the final editor.
 # (Old MAX_EDITOR_RETRIES setting is now meaningless; we always run once.)
-
-NEWSLETTER_CHOICES = ["ledger", "pulse", "download"]
 
 # US Central Time = UTC-6 (CDT) or UTC-5 (CST). May 18 = CDT (DST).
 CT_OFFSET_HOURS = -5  # CDT in May. Adjust if you need CST in winter.
@@ -83,7 +81,7 @@ def _build_subject(palette: dict, payload: dict, issue_number) -> str:
     """Lead the subject line with the Big Signal headline — that is what drives
     opens; the sender name already identifies the newsletter in the From field —
     then a compact brand tag. Falls back to brand + issue № on a thin issue with
-    no Top Stories. (Was a bland 'The Download · № 009', which buried the hook.)"""
+    no Top Stories. (A bare brand + issue number buries the hook.)"""
     name = str(palette.get("name", "")).strip()
     top = payload.get("top_stories") or []
     if top and isinstance(top[0], dict) and str(top[0].get("headline") or "").strip():
@@ -148,8 +146,8 @@ def _enforce_top3_floor(top_stories, bench):
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--newsletter", required=True,
-                        help="ledger / pulse / download, OR any platform audience "
-                             "with a briefs/<name>.json spec")
+                        help="an audience short-name with a briefs/<name>.json spec "
+                             "(or a configured audience pack)")
     parser.add_argument("--dry-run", action="store_true", help="Skip Gmail send; just render and exit.")
     parser.add_argument("--create-draft-only", action="store_true", help="Create a Gmail draft instead of sending.")
     parser.add_argument("--to", action="append", default=None, help="Override recipient list (can repeat). When set, no Notion query is done.")
@@ -247,8 +245,8 @@ def main() -> int:
     # this; this is the post-hoc sanity check at the orchestration layer.
     # Stale stories aren't auto-rejected (model might have judgment we lack),
     # but they're surfaced loudly + appended to anomalies so the human reviewer
-    # sees them immediately. Story 02 of Pulse №005 (2026-05-07 URL when today
-    # was 2026-05-25 = 18 days stale) is the failure mode this catches.
+    # sees them immediately. A story whose source URL is dated well before the
+    # freshness floor (e.g. 18 days stale) is the failure mode this catches.
     from datetime import date as _date
     from scripts.freshness import freshness_floor  # stdlib-only — replay-safe
     _y, _m, _d = (int(x) for x in today_date_iso.split("-"))
@@ -365,7 +363,7 @@ def main() -> int:
         print(f"[{newsletter}] To: {to_list}; BCC: {len(bcc_list)} recipients")
 
     # 5. Send
-    palette = PALETTES[newsletter]
+    palette = _effective_palette(newsletter)
     subject = _build_subject(palette, payload, issue_number)
 
     print(f"[{newsletter}] {'Creating draft' if args.create_draft_only else 'Sending'}...")

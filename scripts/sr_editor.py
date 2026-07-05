@@ -203,7 +203,7 @@ def review(
     """Run the Sr. Editor review.
 
     Args:
-        newsletter: 'ledger' | 'pulse' | 'download'
+        newsletter: audience short-name (a briefs/<name>.json key or config pack)
         story_payload: The structured story output from the main agent.
         today_date_iso: Current date as 'YYYY-MM-DD'. Injected into the
             editor's system prompt so it doesn't misread current-year URLs
@@ -224,11 +224,7 @@ def review(
     """
     import anthropic  # lazy import — see top-of-module note
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], max_retries=6)
-    display_name = {
-        "ledger": "Ledger",
-        "pulse": "Pulse",
-        "download": "Download",
-    }.get(newsletter, newsletter.capitalize())
+    display_name = newsletter.capitalize()
 
     # Audience label for the prompt's implications-framing guidance. Pack
     # newsletters configure it (config/audiences/); platform audiences fall

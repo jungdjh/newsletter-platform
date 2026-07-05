@@ -51,7 +51,7 @@ def get_active_recipients(newsletter: str) -> list[dict[str, str]]:
     """Return active recipients subscribed to the given newsletter.
 
     Args:
-        newsletter: One of 'ledger', 'pulse', 'download'.
+        newsletter: The audience short-name.
 
     Returns:
         List of {name, email} dicts.

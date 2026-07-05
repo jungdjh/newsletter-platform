@@ -2,8 +2,8 @@
 """Brief generator — the platform core.
 
 Turns an audience description ("AI PMs", "nursing students") into a compact
-operational brief the existing agent loop can run — same shape as the
-hand-written DOWNLOAD/LEDGER/PULSE briefs in compact_prompts.py.
+operational brief the existing agent loop can run — same shape as a
+hand-written audience brief.
 
 A brief = VARIABLE parts (audience, relevance gate, tracks, geography, tone,
 Korean?) wrapped around a FIXED engine contract (output buckets, field

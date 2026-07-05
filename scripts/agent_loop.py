@@ -24,8 +24,8 @@ The expected final-output shape (Claude is instructed to produce this JSON):
           "dateline": "Cupertino · Brussels",
           "hero_image_url": "https://..." | null,
           "source_url": "https://...",
-          "korean_takeaway": "..." | null,   # Ledger + Pulse only
-          "implications": ["...", "...", "..."]  # 2 EN bullets, + 1 KO for Ledger/Pulse
+          "korean_takeaway": "..." | null,   # only when the audience enables Korean
+          "implications": ["...", "...", "..."]  # 2 EN bullets (+ 1 KO if enabled)
       }, ...],
       "watchlist": [{"tag": "Filing", "headline": "...", "source": "..."}, ...],
       "also_noted": [{"headline": "...", "source": "..."}, ...],
@@ -89,7 +89,7 @@ SLEEP_BETWEEN_TURNS_SEC = 12
 SDK_MAX_RETRIES = 6
 # Cap per-turn output. Sonnet rarely uses >2K tokens for tool-use turns;
 # 4096 is plenty and cuts ~5-15 sec of generation time per turn vs 8192.
-MAX_RESPONSE_TOKENS = 8192  # bumped 2026-05-25 from 4096 — Ledger/Pulse payloads with source_excerpt + korean_takeaway across 3 stories were occasionally truncating mid-serialization
+MAX_RESPONSE_TOKENS = 8192  # bumped 2026-05-25 from 4096 — payloads with source_excerpt + korean_takeaway across 3 stories were occasionally truncating mid-serialization
 
 # Tier-1 baseline allowlist — broad-coverage outlets unioned into EVERY audience's
 # allowlist (in build_tool_schemas) so a genuinely consequential story isn't missed
@@ -208,7 +208,7 @@ _STATIC_TOOL_SCHEMAS = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "newsletter": {"type": "string", "enum": ["ledger", "pulse", "download"]},
+                "newsletter": {"type": "string", "description": "The audience short-name."},
                 "since_iso": {"type": "string", "description": "ISO 8601 timestamp."},
             },
             "required": ["newsletter", "since_iso"],
@@ -267,9 +267,9 @@ _STATIC_TOOL_SCHEMAS = [
                             "korean_takeaway": {
                                 "type": ["string", "null"],
                                 "description": (
-                                    "Ledger + Pulse ONLY (omit / null for Download). 1-2 short Korean lines, "
-                                    "명사형 종결 (~됨, ~함, ~임), 개조식. Tone: 전략기획팀 수석 컨설턴트가 임원진 보고용으로 작성. "
-                                    "≤ 80 chars total. Captures the executive-briefing essence of the story for Korean-native readers."
+                                    "Include only when the audience brief calls for a Korean takeaway; otherwise null. "
+                                    "1-2 short Korean lines, 명사형 종결 (~됨, ~함, ~임), 개조식, ≤ 80 chars total. "
+                                    "Captures the essence of the story for Korean-native readers."
                                 ),
                             },
                         },

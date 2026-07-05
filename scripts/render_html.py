@@ -1,15 +1,14 @@
 """Render a newsletter as Outlook-safe HTML + plaintext.
 
-Takes structured story payload from the agent loop, applies the newsletter's
-palette (cobalt/green for Ledger, teal/lime for Pulse, burgundy/magenta for
-Download), and emits a 600px table-based email that survives strict
+Takes structured story payload from the agent loop, applies the audience's
+configured palette, and emits a 600px table-based email that survives strict
 corporate Outlook (the v8-polish design we landed on).
 
 Public API:
     render_newsletter(newsletter, content, meta) -> (html_str, plaintext_str)
 
 Where:
-    newsletter: 'ledger' | 'pulse' | 'download'
+    newsletter: audience short-name (a briefs/<name>.json key or config pack)
     content: {
         "top3": [Story, ...],         # exactly 2 or 3 entries
         "watchlist": [Signal, ...],   # 0-3 entries, omit section if empty
@@ -699,7 +698,7 @@ def _render_implications_bullets(implications, palette, *, on_dark_card: bool) -
 
 
 def _render_korean_takeaway(takeaway: str | None, palette, *, on_dark_card: bool) -> str:
-    """Render the bilingual Korean 핵심 요약 block (Ledger + Pulse only).
+    """Render the bilingual Korean 핵심 요약 block (shown only when the audience enables Korean).
 
     on_dark_card=True  → Big Signal context, dark bg → use light body color
     on_dark_card=False → standard card on white → use dark ink color
