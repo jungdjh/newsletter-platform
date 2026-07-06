@@ -17,15 +17,12 @@
   h1 span{color:var(--accent)}
   .sub{color:var(--mut);font-size:13px;margin-top:3px}
   main{max-width:1080px;margin:0 auto;padding:24px 28px}
-  .form{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
-  .f{display:flex;flex-direction:column;gap:6px}
-  .f.grow{flex:1;min-width:240px}
-  label{font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
-  input,select{background:var(--bg);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:11px 12px;font-size:15px}
-  button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:12px 22px;font-size:15px;font-weight:700;cursor:pointer}
-  button:disabled{opacity:.5;cursor:not-allowed}
-  .modes{display:flex;gap:14px;margin-top:14px;font-size:13px;color:var(--mut)}
-  .modes label{display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-weight:500}
+  .hero{display:flex;gap:16px;flex-wrap:wrap;align-items:center;justify-content:space-between;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:20px 22px}
+  .hero .lead{flex:1;min-width:260px}
+  .hero .lead .t{font-size:16px;font-weight:700;color:var(--ink)}
+  .hero .lead .d{color:var(--mut);font-size:13px;margin-top:4px}
+  button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:13px 26px;font-size:15px;font-weight:700;cursor:pointer;white-space:nowrap}
+  button:disabled{opacity:.55;cursor:default}
   /* Single-view "snake" flow: row 1 left->right, row 2 right->left, no side-scroll. */
   .flow{margin:30px 0 10px}
   .frow{display:flex;align-items:stretch;gap:0}
@@ -43,7 +40,6 @@
   .node.active .dot{background:var(--coral);animation:pulse 1s infinite}
   .node.done{opacity:1;border-color:var(--ok)}
   .node.done .dot{background:var(--ok)}
-  .node.error{opacity:1;border-color:#ff6b6b}.node.error .dot{background:#ff6b6b}
   .node.gate{border-style:dashed}
   .edge{flex:0 0 28px;align-self:center;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:15px}
   @media(max-width:760px){.frow{flex-wrap:wrap;gap:12px}.frow.r2{flex-direction:row}.node{flex:1 1 44%}.edge,.turn{display:none}}
@@ -52,26 +48,23 @@
   .result.show{display:block}
   .cfg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;font-size:13px;color:var(--mut);margin-bottom:14px}
   .cfg b{color:var(--ink)}
+  .cfg a{color:var(--accent);text-decoration:none}
   iframe{width:100%;height:760px;border:1px solid var(--line);border-radius:12px;background:#fff}
 </style></head><body>
-<header><h1>Newsletter <span>Studio</span></h1><div class="sub">Type an audience &rarr; watch the agent research, draft, fact-check, and render a responsive issue. Live.</div></header>
+<header><h1>Newsletter <span>Studio</span></h1><div class="sub">An AI agent researches, drafts, fact-checks, and renders a real newsletter issue &mdash; watch it run.</div></header>
 <main>
-  <div class="form">
-    <div class="f grow"><label>Audience</label><input id="aud" placeholder="e.g. AI safety researchers, indie game devs, hospital CFOs"></div>
-    <div class="f"><label>Cadence</label><select id="cad"><option>Weekly</option><option>Twice weekly</option><option>Daily</option></select></div>
-    <div class="f grow"><label>Focus (optional)</label><input id="foc" placeholder="e.g. US market, regulation, funding"></div>
-    <button id="go">Generate</button>
-    <button id="stop" style="display:none;background:var(--line);color:var(--ink)">Stop</button>
-  </div>
-  <div class="modes">
-    <label><input type="radio" name="mode" value="simulate" checked> Demo (instant — animated pipeline + a real issue, never fails)</label>
-    <label><input type="radio" name="mode" value="live"> Live (real generation, ~1–2 min — proves it works on any subject)</label>
+  <div class="hero">
+    <div class="lead">
+      <div class="t">See the engine run</div>
+      <div class="d">Watch the agentic pipeline work through a real issue &mdash; research &rarr; draft &rarr; fact-check &rarr; render. Instant, no signup.</div>
+    </div>
+    <button id="go">&#9654;&nbsp; See it run</button>
   </div>
   <div id="flow" class="flow"></div>
-  <div id="result" class="result"><div id="cfg" class="cfg"></div><iframe id="frame"></iframe></div>
+  <div id="result" class="result"><div id="cfg" class="cfg"></div><iframe id="frame" title="Sample newsletter issue"></iframe></div>
 </main>
 <script>
-const NODES = [{"id": "brief", "label": "Brief", "detail": "Configuring for your audience"}, {"id": "research", "label": "Research", "detail": "Searching the web for fresh stories"}, {"id": "read", "label": "Read sources", "detail": "Fetching + reading the articles"}, {"id": "freshness", "label": "Freshness gate", "detail": "Dropping anything stale"}, {"id": "draft", "label": "Draft", "detail": "Writing the issue"}, {"id": "editor", "label": "Sr. Editor", "detail": "Fact-checking every claim against source"}, {"id": "render", "label": "Render", "detail": "Responsive, dark-mode, Outlook-safe email"}, {"id": "done", "label": "Done", "detail": "Ready for your review"}];
+const NODES = [{"id": "brief", "label": "Brief", "detail": "Configuring for the audience"}, {"id": "research", "label": "Research", "detail": "Searching the web for fresh stories"}, {"id": "read", "label": "Read sources", "detail": "Fetching + reading the articles"}, {"id": "freshness", "label": "Freshness gate", "detail": "Dropping anything stale"}, {"id": "draft", "label": "Draft", "detail": "Writing the issue"}, {"id": "editor", "label": "Sr. Editor", "detail": "Fact-checking every claim against source"}, {"id": "render", "label": "Render", "detail": "Responsive, dark-mode, Outlook-safe email"}, {"id": "done", "label": "Done", "detail": "Ready for review"}];
 const flow = document.getElementById('flow');
 function paint(states){
   flow.innerHTML='';
@@ -86,57 +79,51 @@ function paint(states){
       el.className='node'+(n.id==='editor'?' gate':'')+(st?(' '+st.state):'');
       el.innerHTML='<div class="num">'+(gi+1)+'</div><div class="dot"></div><div class="nl">'+n.label+'</div><div class="nd">'+((st&&st.detail)||n.detail)+'</div>';
       rowEl.appendChild(el);
-      if(ci<idxs.length-1){const e=document.createElement('div');e.className='edge';e.textContent=(ri===1?'\u2190':'\u2192');rowEl.appendChild(e);}
+      if(ci<idxs.length-1){const e=document.createElement('div');e.className='edge';e.textContent=(ri===1?'←':'→');rowEl.appendChild(e);}
     });
     flow.appendChild(rowEl);
-    if(ri===0){const t=document.createElement('div');t.className='turn';t.textContent='\u2193';flow.appendChild(t);}
+    if(ri===0){const t=document.createElement('div');t.className='turn';t.textContent='↓';flow.appendChild(t);}
   });
 }
 let states={}; paint(states);
-const goBtn=document.getElementById('go'), stopBtn=document.getElementById('stop');
-let curES=null, curJob=null;
-function setRunning(on){
-  goBtn.disabled=on; goBtn.textContent=on?'Generating…':'Generate';
-  stopBtn.style.display=on?'inline-block':'none';
-}
-function finish(){ if(curES){curES.close();curES=null;} curJob=null; setRunning(false); }
-goBtn.onclick=async()=>{
-  setRunning(true);
-  states={}; paint(states); document.getElementById('result').classList.remove('show');
-  const mode=document.querySelector('input[name=mode]:checked').value;
-  const body={audience:document.getElementById('aud').value,cadence:document.getElementById('cad').value,focus:document.getElementById('foc').value,mode};
-  const r=await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  const {job_id}=await r.json(); curJob=job_id;
-  const es=new EventSource('/api/stream/'+job_id); curES=es;
-  es.onmessage=(m)=>{
-    const ev=JSON.parse(m.data);
-    if(ev.type==='result'){
-      const c=ev.config||{};
-      document.getElementById('cfg').innerHTML='Audience: <b>'+(c.audience||'')+'</b> &middot; Cadence: <b>'+(c.cadence||'')+'</b><br>'+(c.note||'');
-      document.getElementById('frame').srcdoc=ev.html;
-      document.getElementById('result').classList.add('show');
-    }else if(ev.type==='end'){
-      finish();
-    }else if(ev.node){
-      const prior=states[ev.node]&&states[ev.node].detail;
-      states[ev.node]={state:ev.state,detail:ev.detail||prior||''}; paint(states);
-    }
-  };
-  es.onerror=()=>{ finish(); };
-};
-stopBtn.onclick=()=>{
-  if(curJob){ fetch('/api/stop/'+curJob,{method:'POST'}).catch(()=>{}); }
-  finish();
-};
-// Hybrid: open with a real baked issue instantly (free, never fails); the
-// Generate button runs a fresh one live. Keeps the demo showable on a phone
-// the moment it opens, with no wait and no API call.
-fetch('api/sample.json').then(r=>r.json()).then(s=>{
-  if(!s.html) return;
-  document.getElementById('cfg').innerHTML='<b>Sample issue</b> &middot; a real one this system shipped. Type an audience and hit <b>Generate</b> to run a fresh one live.';
-  document.getElementById('frame').srcdoc=s.html;
+const goBtn=document.getElementById('go');
+const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
+
+// The sample issue is a real one this system shipped, baked into the static site
+// (api/sample.json). No backend, no API key, no network generation — so nothing
+// can silently fail. "See it run" animates the real pipeline stages client-side,
+// then reveals the finished issue.
+let SAMPLE=null;
+fetch('api/sample.json').then(r=>r.json()).then(s=>{ if(s&&s.html) SAMPLE=s; }).catch(()=>{});
+
+function revealSample(){
+  const cfg=document.getElementById('cfg');
+  if(SAMPLE&&SAMPLE.html){
+    cfg.innerHTML='<b>The AI PM Brief</b> &middot; a real issue this engine produced end-to-end, human-reviewed before publishing. '
+      +'<a href="https://github.com/jungdjh/newsletter-platform" target="_blank" rel="noopener">See how it works &rarr;</a>';
+    document.getElementById('frame').srcdoc=SAMPLE.html;
+  }else{
+    cfg.innerHTML='<b>Sample issue unavailable right now.</b> <a href="https://github.com/jungdjh/newsletter-platform" target="_blank" rel="noopener">See how the engine works &rarr;</a>';
+  }
   document.getElementById('result').classList.add('show');
-}).catch(()=>{});
+}
+
+async function playDemo(){
+  goBtn.disabled=true; goBtn.textContent='Running…';
+  states={}; paint(states);
+  document.getElementById('result').classList.remove('show');
+  for(const n of NODES){
+    states[n.id]={state:'active',detail:n.detail}; paint(states);
+    await sleep(n.id==='research'||n.id==='read'?720:430);
+    states[n.id]={state:'done',detail:n.detail}; paint(states);
+    await sleep(90);
+  }
+  revealSample();
+  goBtn.disabled=false; goBtn.innerHTML='↺&nbsp; Replay';
+  document.getElementById('result').scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+goBtn.onclick=playDemo;
+
 // Register the service worker so the home-screen icon installs + opens offline to the shell.
 if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
-</script><script>(function(){var g=document.getElementById('go');if(g){g.textContent='Generate (live) \u2192';g.onclick=function(e){e&&e.preventDefault();var c=document.getElementById('cfg');if(c)c.innerHTML='<b>Live generation</b> runs in the hosted version of this app. This static demo shows a real issue the system produced end-to-end \u2014 research \u2192 draft \u2192 fact-check \u2192 render.';};}var s=document.getElementById('stop');if(s)s.style.display='none';})();</script></body></html>
+</script></body></html>
