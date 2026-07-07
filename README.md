@@ -28,7 +28,7 @@ The human is the final editor; the agent never sends unreviewed.
 
 **Content-quality controls.** A Top-N floor guarantees a full lead section (or loudly flags a thin news day rather than shipping a one-story issue). Implications are constrained to reason from the product's *actual* competitive frame. Reserve stories are de-duplicated against the lead set.
 
-**Tested and adversarially reviewed.** ~200 automated tests cover the render, the review/approve logic, the reliability guards, and the content rules. Changes are run through an adversarial "try to break it" review before merge — which has caught real defects (e.g., a null-field crash on a specific render path) pre-ship.
+**Tested and adversarially reviewed.** ~236 automated tests across the system (56 of them in this public mirror) cover the render, the review/approve logic, the reliability guards, and the content rules. The self-verification is measured, not asserted: a fabrication-detection eval catches 100% of planted fabrications (33 of 33) at a 12% false-positive rate. Changes are run through an adversarial "try to break it" review before merge — which has caught real defects (e.g., a null-field crash on a specific render path) pre-ship.
 
 ## Architecture (one engine, two faces)
 
