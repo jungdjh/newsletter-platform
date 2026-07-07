@@ -81,6 +81,21 @@
   .cfg a{color:var(--accent);text-decoration:none}
   .cfg a:hover{text-decoration:underline}
   iframe{width:100%;height:760px;border:1px solid var(--line);border-radius:12px;background:#fff}
+  /* F6 — gallery: six audiences, one engine */
+  .gallery{margin-top:26px;display:none}
+  .gallery.show{display:block;animation:rise .4s ease both}
+  .gh{font-size:17px;font-weight:700}
+  .gsub{color:var(--mut);font-size:13.5px;margin:4px 0 16px;max-width:66ch}
+  .gcards{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:820px){.gcards{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:520px){.gcards{grid-template-columns:1fr}}
+  .gcard{text-align:left;background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:15px 16px;cursor:pointer;transition:.15s;color:var(--ink);display:block;width:100%;min-width:0;font-family:inherit;white-space:normal;overflow-wrap:anywhere}
+  .gcard:hover{border-color:var(--gc);transform:translateY(-2px)}
+  .gcard.on{border-color:var(--gc);box-shadow:inset 0 0 0 1px var(--gc)}
+  .gcard .gcn{display:flex;align-items:center;gap:8px;font-size:14.5px;font-weight:700}
+  .gcard .gdot{width:9px;height:9px;border-radius:50%;background:var(--gc);flex:0 0 auto}
+  .gcard .gcs{display:block;color:var(--mut);font-size:12.5px;line-height:1.45;margin-top:6px}
+  .gcard .gco{display:block;margin-top:10px;font:700 11px/1 ui-monospace,'SF Mono',Menlo,monospace;letter-spacing:.04em;color:var(--gc)}
   /* F7 — honest contact finale */
   .finale{margin-top:22px;display:none}
   .finale.show{display:block;animation:rise .4s ease both}
@@ -134,6 +149,20 @@
 
   <!-- F5: the revealed issue -->
   <div id="result" class="result"><div id="cfg" class="cfg"></div><iframe id="frame" title="Sample newsletter issue"></iframe></div>
+
+  <!-- F6: gallery — six audiences, one engine -->
+  <div id="gallery" class="gallery">
+    <div class="gh">See what else it ships</div>
+    <div class="gsub">Six audiences, one engine. The same research, fact-checking, and human review &mdash; a different beat each time. Open any issue above.</div>
+    <div class="gcards">
+      <button class="gcard" style="--gc:#6D5EF5" data-f="api/gallery/ai-pms.html" data-n="The AI PM Brief" data-s="a real issue this engine produced end-to-end"><span class="gcn"><span class="gdot"></span>The AI PM Brief</span><span class="gcs">Models, agents, evals &amp; shipping AI products, for product managers.</span><span class="gco">Open issue &rarr;</span></button>
+      <button class="gcard" style="--gc:#0EA5A5" data-f="api/gallery/nursing.html" data-n="The Pre-Nursing Brief" data-s="a real issue this engine produced end-to-end"><span class="gcn"><span class="gdot"></span>The Pre-Nursing Brief</span><span class="gcs">Prereqs, the TEAS, and getting into nursing school.</span><span class="gco">Open issue &rarr;</span></button>
+      <button class="gcard" style="--gc:#B4530A" data-f="api/gallery/tk-parents.html" data-n="Show &amp; Tell" data-s="a real issue this engine produced end-to-end"><span class="gcn"><span class="gdot"></span>Show &amp; Tell</span><span class="gcs">Learning, schools, and weekend fun for Bay Area parents of TK&ndash;2nd graders.</span><span class="gco">Open issue &rarr;</span></button>
+      <button class="gcard" style="--gc:#0E3768" data-f="api/gallery/college-admissions.html" data-n="The Admissions Brief" data-s="a real issue this engine produced end-to-end"><span class="gcn"><span class="gdot"></span>The Admissions Brief</span><span class="gcs">Deadlines, testing, and aid for applying juniors, seniors, and parents.</span><span class="gco">Open issue &rarr;</span></button>
+      <button class="gcard" style="--gc:#166534" data-f="api/gallery/first-time-homebuyers.html" data-n="The First Key" data-s="a real issue this engine produced end-to-end"><span class="gcn"><span class="gdot"></span>The First Key</span><span class="gcs">Rates, programs, and the Bay Area market for first-time buyers.</span><span class="gco">Open issue &rarr;</span></button>
+      <button class="gcard" style="--gc:#4C6FFF" data-f="api/gallery/ba-startup.html" data-n="The Bay Signal" data-s="a real issue this engine produced end-to-end"><span class="gcn"><span class="gdot"></span>The Bay Signal</span><span class="gcs">Bay Area funding, exits, hiring, and the shifts that affect builders.</span><span class="gco">Open issue &rarr;</span></button>
+    </div>
+  </div>
 
   <!-- F7: honest contact finale -->
   <div id="finale" class="finale">
@@ -221,6 +250,8 @@ async function playDemo(){
   document.getElementById('result').classList.remove('show');
   document.getElementById('finale').classList.remove('show');
   document.getElementById('review').classList.remove('show');
+  document.getElementById('gallery').classList.remove('show');
+  document.querySelectorAll('.gcard').forEach(x=>x.classList.remove('on'));
   for(const n of NODES){
     states[n.id]={state:'active',detail:n.detail}; paint(states);
     await sleep(n.id==='research'||n.id==='read'?720:430);
@@ -229,11 +260,23 @@ async function playDemo(){
   }
   await playReview();               // F3 — approve gate BEFORE the reveal
   revealSample();                   // F5 — reveal only after approval
+  document.getElementById('gallery').classList.add('show');  // F6 — see what else it ships
   document.getElementById('finale').classList.add('show');   // F7 — honest close
   goBtn.disabled=false; goBtn.innerHTML='↺&nbsp; Replay';
   document.getElementById('result').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
 goBtn.onclick=playDemo;
+
+// F6 — a gallery card loads that issue into the reveal frame (static file, same origin).
+const GCASE='https://github.com/jungdjh/newsletter-platform/blob/main/README.md';
+document.querySelectorAll('.gcard').forEach(c=>c.onclick=()=>{
+  const frame=document.getElementById('frame');
+  frame.removeAttribute('srcdoc'); frame.src=c.dataset.f;
+  document.getElementById('cfg').innerHTML='<b>'+c.dataset.n+'</b> &middot; '+c.dataset.s+', human-reviewed before publishing. '
+    +'<a href="'+GCASE+'" target="_blank" rel="noopener">Read the case study &rarr;</a>';
+  document.querySelectorAll('.gcard').forEach(x=>x.classList.toggle('on', x===c));
+  document.getElementById('result').scrollIntoView({behavior:'smooth',block:'start'});
+});
 
 // Register the service worker so the home-screen icon installs + opens offline to the shell.
 if('serviceWorker' in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
