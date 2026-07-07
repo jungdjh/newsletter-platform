@@ -9,7 +9,7 @@
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <style>
-  :root{--bg:#0f1126;--panel:#171a33;--line:#2a2f52;--ink:#e9eaf5;--mut:#9aa0c7;--accent:#FF2D86;--coral:#FF7A45;--ok:#3ad29f;}
+  :root{--bg:#0f1126;--panel:#171a33;--line:#2a2f52;--ink:#e9eaf5;--mut:#9aa0c7;--accent:#FF2D86;--coral:#FF7A45;--ok:#3ad29f;--warn:#F5B841;}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
   header{padding:22px 28px;padding-top:calc(env(safe-area-inset-top, 0px) + 18px);border-bottom:1px solid var(--line)}
@@ -23,17 +23,22 @@
   .hero .lead .d{color:var(--mut);font-size:13px;margin-top:4px}
   button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:13px 26px;font-size:15px;font-weight:700;cursor:pointer;white-space:nowrap}
   button:disabled{opacity:.55;cursor:default}
+  /* F1 — display-only brief chips: what this run is generating (NOT inputs) */
+  .brief{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+  .chip{display:inline-flex;align-items:baseline;gap:6px;background:#12152b;border:1px solid var(--line);border-radius:999px;padding:6px 13px;font-size:12px;color:var(--ink);cursor:default;user-select:none}
+  .chip .k{color:var(--mut);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
   /* Single-view "snake" flow: row 1 left->right, row 2 right->left, no side-scroll. */
   .flow{margin:30px 0 10px}
-  .frow{display:flex;align-items:stretch;gap:0}
+  /* F2 — badges float on the node's top edge, so give each row headroom and let
+     the badge overflow the node (was clipped by overflow:hidden). */
+  .frow{display:flex;align-items:stretch;gap:0;padding-top:13px}
   .frow.r2{flex-direction:row-reverse}
   .turn{display:flex;justify-content:flex-end;color:var(--mut);font-size:18px;line-height:1;margin:7px 0;padding-right:6.5%}
-  .node{flex:1 1 0;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 14px 12px;position:relative;transition:.2s;opacity:.5;overflow:hidden}
+  .node{flex:1 1 0;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 14px 12px;position:relative;transition:.2s;opacity:.5}
   .node .num{position:absolute;top:-11px;left:12px;width:22px;height:22px;border-radius:50%;background:var(--line);color:var(--ink);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;border:2px solid var(--bg)}
   .node.active .num{background:var(--coral);color:#fff}
   .node.done .num{background:var(--ok);color:#06251a}
-  .node .nl{font-weight:700;font-size:13px}
-  .node .nl{overflow-wrap:anywhere}
+  .node .nl{font-weight:700;font-size:13px;overflow-wrap:anywhere}
   .node .nd{font-size:11px;color:var(--mut);margin-top:3px;min-height:30px;line-height:1.35;overflow-wrap:anywhere}
   .node .dot{position:absolute;top:13px;right:12px;width:8px;height:8px;border-radius:50%;background:var(--line)}
   .node.active{opacity:1;border-color:var(--coral);box-shadow:0 0 0 1px var(--coral),0 6px 20px rgba(255,122,69,.18)}
@@ -44,24 +49,100 @@
   .edge{flex:0 0 28px;align-self:center;display:flex;align-items:center;justify-content:center;color:var(--mut);font-size:15px}
   @media(max-width:760px){.frow{flex-wrap:wrap;gap:12px}.frow.r2{flex-direction:row}.node{flex:1 1 44%}.edge,.turn{display:none}}
   @keyframes pulse{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.5);opacity:.5}}
+  /* F3 — human-review gate: a scripted editor pass that must APPROVE before the issue reveals */
+  .review{margin-top:24px;display:none}
+  .review.show{display:block;animation:rise .4s ease both}
+  @keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+  .rvcard{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .rvhead{display:flex;align-items:center;gap:9px;font-size:13px;font-weight:700}
+  .rvhead .badge{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#06251a;background:var(--ok);border-radius:999px;padding:3px 9px}
+  .rvhead .badge.gate{background:var(--warn);color:#2a1e00}
+  .rvsub{color:var(--mut);font-size:12px;margin:4px 0 14px}
+  .claim{border:1px solid var(--line);border-radius:9px;padding:12px 14px;margin-top:10px;opacity:0;transform:translateY(6px);transition:.35s}
+  .claim.in{opacity:1;transform:none}
+  .claim .lbl{font-size:10px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--mut)}
+  .claim .txt{font-size:13.5px;margin-top:5px;line-height:1.45}
+  .claim.flag{border-color:rgba(245,184,65,.55);background:rgba(245,184,65,.07)}
+  .claim.flag .lbl{color:var(--warn)}
+  .claim.flag .txt s{color:var(--mut);text-decoration-color:var(--warn)}
+  .claim.fix{border-color:rgba(58,210,159,.5);background:rgba(58,210,159,.07)}
+  .claim.fix .lbl{color:var(--ok)}
+  .rvact{display:flex;align-items:center;gap:12px;margin-top:16px;flex-wrap:wrap}
+  .approve{background:var(--ok);color:#06251a;border:0;border-radius:8px;padding:11px 20px;font-size:14px;font-weight:700;position:relative;transition:.2s}
+  .approve.press{transform:scale(.94);filter:brightness(.9)}
+  .approve.done{background:#12152b;color:var(--ok);box-shadow:inset 0 0 0 1px var(--ok)}
+  .rvnote{font-size:12px;color:var(--mut)}
+  .rvnote b{color:var(--ink)}
+  /* F5 — reveal */
   .result{margin-top:22px;display:none}
-  .result.show{display:block}
+  .result.show{display:block;animation:rise .4s ease both}
   .cfg{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 16px;font-size:13px;color:var(--mut);margin-bottom:14px}
   .cfg b{color:var(--ink)}
   .cfg a{color:var(--accent);text-decoration:none}
+  .cfg a:hover{text-decoration:underline}
   iframe{width:100%;height:760px;border:1px solid var(--line);border-radius:12px;background:#fff}
+  /* F7 — honest contact finale */
+  .finale{margin-top:22px;display:none}
+  .finale.show{display:block;animation:rise .4s ease both}
+  .fcard{background:linear-gradient(180deg,#171a33,#141730);border:1px solid var(--line);border-radius:12px;padding:24px 24px}
+  .fcard .ft{font-size:17px;font-weight:700}
+  .fcard .fd{color:var(--mut);font-size:13.5px;line-height:1.6;margin-top:8px;max-width:64ch}
+  .fcta{display:inline-flex;align-items:center;gap:8px;margin-top:16px;background:var(--accent);color:#fff;border-radius:8px;padding:12px 22px;font-size:14px;font-weight:700;text-decoration:none}
+  .fcta:hover{filter:brightness(1.06)}
 </style></head><body>
 <header><h1>Newsletter <span>Studio</span></h1><div class="sub">An AI agent researches, drafts, fact-checks, and renders a real newsletter issue &mdash; watch it run.</div></header>
 <main>
   <div class="hero">
-    <div class="lead">
-      <div class="t">See the engine run</div>
-      <div class="d">Watch the agentic pipeline work through a real issue &mdash; research &rarr; draft &rarr; fact-check &rarr; render. Instant, no signup.</div>
+    <div style="width:100%">
+      <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;justify-content:space-between">
+        <div class="lead">
+          <div class="t">See the engine run</div>
+          <div class="d">Watch the agentic pipeline work through a real issue &mdash; research &rarr; draft &rarr; fact-check &rarr; a human approval &rarr; render. Instant, no signup.</div>
+        </div>
+        <button id="go">&#9654;&nbsp; See it run</button>
+      </div>
+      <!-- F1: what this run generates — display only, not inputs -->
+      <div class="brief" aria-label="Brief for this run">
+        <span class="chip"><span class="k">Audience</span> AI Product Managers</span>
+        <span class="chip"><span class="k">Cadence</span> Weekly</span>
+        <span class="chip"><span class="k">Focus</span> Shipping AI products</span>
+      </div>
     </div>
-    <button id="go">&#9654;&nbsp; See it run</button>
   </div>
+
   <div id="flow" class="flow"></div>
+
+  <!-- F3: human-review gate -->
+  <div id="review" class="review">
+    <div class="rvcard">
+      <div class="rvhead"><span id="rvbadge" class="badge gate">Human review</span> The editor gate &mdash; nothing sends until a person approves</div>
+      <div class="rvsub">Every claim must be quote-anchored to its source. The editor catches what the model can't vouch for.</div>
+      <div id="claimFlag" class="claim flag">
+        <div class="lbl">⚠ Flagged &mdash; not found in source</div>
+        <div class="txt">&ldquo;Enterprise AI budgets <s>jumped 47% in Q2</s>&rdquo;</div>
+      </div>
+      <div id="claimFix" class="claim fix">
+        <div class="lbl">✓ Editor fix &mdash; source-safe</div>
+        <div class="txt">&ldquo;Enterprise AI budgets rose sharply in Q2&rdquo;</div>
+      </div>
+      <div class="rvact">
+        <button id="approve" class="approve">Approve &amp; publish</button>
+        <span id="rvnote" class="rvnote"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- F5: the revealed issue -->
   <div id="result" class="result"><div id="cfg" class="cfg"></div><iframe id="frame" title="Sample newsletter issue"></iframe></div>
+
+  <!-- F7: honest contact finale -->
+  <div id="finale" class="finale">
+    <div class="fcard">
+      <div class="ft">Want to see it run on your audience?</div>
+      <div class="fd">Live generation does real research and real fact-checking, which costs real money per issue &mdash; so it's not a public button. If you're seriously curious, get in touch and I'll run one for you.</div>
+      <a class="fcta" href="mailto:jungdjh@gmail.com?subject=Newsletter%20Studio%20%E2%80%94%20run%20one%20for%20my%20audience">✉&nbsp; Get in touch</a>
+    </div>
+  </div>
 </main>
 <script>
 const NODES = [{"id": "brief", "label": "Brief", "detail": "Configuring for the audience"}, {"id": "research", "label": "Research", "detail": "Searching the web for fresh stories"}, {"id": "read", "label": "Read sources", "detail": "Fetching + reading the articles"}, {"id": "freshness", "label": "Freshness gate", "detail": "Dropping anything stale"}, {"id": "draft", "label": "Draft", "detail": "Writing the issue"}, {"id": "editor", "label": "Sr. Editor", "detail": "Fact-checking every claim against source"}, {"id": "render", "label": "Render", "detail": "Responsive, dark-mode, Outlook-safe email"}, {"id": "done", "label": "Done", "detail": "Ready for review"}];
@@ -92,18 +173,44 @@ const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 // The sample issue is a real one this system shipped, baked into the static site
 // (api/sample.json). No backend, no API key, no network generation — so nothing
 // can silently fail. "See it run" animates the real pipeline stages client-side,
-// then reveals the finished issue.
+// runs a scripted human-approval gate, then reveals the finished issue.
 let SAMPLE=null;
 fetch('api/sample.json').then(r=>r.json()).then(s=>{ if(s&&s.html) SAMPLE=s; }).catch(()=>{});
 
+// F3 — scripted human-review gate. Resolves only after the editor "approves".
+async function playReview(){
+  const review=document.getElementById('review');
+  const flagEl=document.getElementById('claimFlag');
+  const fixEl=document.getElementById('claimFix');
+  const approve=document.getElementById('approve');
+  const note=document.getElementById('rvnote');
+  const badge=document.getElementById('rvbadge');
+  // reset
+  flagEl.classList.remove('in'); fixEl.classList.remove('in');
+  approve.classList.remove('press','done'); approve.textContent='Approve & publish';
+  note.textContent=''; badge.textContent='Human review'; badge.className='badge gate';
+  review.classList.add('show');
+  review.scrollIntoView({behavior:'smooth',block:'nearest'});
+  await sleep(500); flagEl.classList.add('in');       // claim flagged
+  await sleep(1100); fixEl.classList.add('in');        // editor correction
+  await sleep(1000); approve.classList.add('press');   // button visibly clicks
+  await sleep(240); approve.classList.remove('press');
+  approve.classList.add('done'); approve.textContent='✓ Approved';
+  badge.textContent='Approved'; badge.className='badge';
+  note.innerHTML='<b>Approved by the human editor.</b> Now it can send.';
+  await sleep(650);
+}
+
 function revealSample(){
   const cfg=document.getElementById('cfg');
+  const CASE='https://github.com/jungdjh/newsletter-platform/blob/main/README.md';
   if(SAMPLE&&SAMPLE.html){
     cfg.innerHTML='<b>The AI PM Brief</b> &middot; a real issue this engine produced end-to-end, human-reviewed before publishing. '
-      +'<a href="https://github.com/jungdjh/newsletter-platform" target="_blank" rel="noopener">See how it works &rarr;</a>';
+      +'<a href="'+CASE+'" target="_blank" rel="noopener">Read the case study &rarr;</a>';
     document.getElementById('frame').srcdoc=SAMPLE.html;
   }else{
-    cfg.innerHTML='<b>Sample issue unavailable right now.</b> <a href="https://github.com/jungdjh/newsletter-platform" target="_blank" rel="noopener">See how the engine works &rarr;</a>';
+    cfg.innerHTML='<b>Loading the sample issue&hellip;</b> if it doesn’t appear, '
+      +'<a href="'+CASE+'" target="_blank" rel="noopener">read the case study &rarr;</a>';
   }
   document.getElementById('result').classList.add('show');
 }
@@ -112,13 +219,17 @@ async function playDemo(){
   goBtn.disabled=true; goBtn.textContent='Running…';
   states={}; paint(states);
   document.getElementById('result').classList.remove('show');
+  document.getElementById('finale').classList.remove('show');
+  document.getElementById('review').classList.remove('show');
   for(const n of NODES){
     states[n.id]={state:'active',detail:n.detail}; paint(states);
     await sleep(n.id==='research'||n.id==='read'?720:430);
     states[n.id]={state:'done',detail:n.detail}; paint(states);
     await sleep(90);
   }
-  revealSample();
+  await playReview();               // F3 — approve gate BEFORE the reveal
+  revealSample();                   // F5 — reveal only after approval
+  document.getElementById('finale').classList.add('show');   // F7 — honest close
   goBtn.disabled=false; goBtn.innerHTML='↺&nbsp; Replay';
   document.getElementById('result').scrollIntoView({behavior:'smooth',block:'nearest'});
 }
