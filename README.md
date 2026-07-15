@@ -1,8 +1,8 @@
 # Newsletter Studio — an autonomous, human-reviewed AI newsletter system
 
-**A production system that researches the day's news, drafts a curated issue, fact-checks its own claims, routes it through a human review console, and emails it — on a schedule, unattended.**
-
 ▶ **[Live demo](https://jungdjh.github.io/newsletter-platform/)** — watch the pipeline run and read a real issue it produced. Installable as a PWA.
+
+**I don't trust a single AI's output — I verify around the model.** This system is that principle in production: it researches the day's news, drafts a curated issue, fact-checks its own claims against the source text, routes the draft through a human review console, and emails it — on a schedule, unattended.
 
 ---
 
@@ -28,7 +28,7 @@ The human is the final editor; the agent never sends unreviewed.
 
 **Content-quality controls.** A Top-N floor guarantees a full lead section (or loudly flags a thin news day rather than shipping a one-story issue). Implications are constrained to reason from the product's *actual* competitive frame. Reserve stories are de-duplicated against the lead set.
 
-**Tested and adversarially reviewed.** ~258 automated tests across the system (56 of them in this public mirror) cover the render, the review/approve logic, the reliability guards, and the content rules. The self-verification is measured, not asserted: a fabrication-detection eval catches 100% of planted fabrications (33 of 33) at a 12% false-positive rate. Changes are run through an adversarial "try to break it" review before merge — which has caught real defects (e.g., a null-field crash on a specific render path) pre-ship.
+**Tested and adversarially reviewed.** ~258 automated tests across the system (56 of them in this public mirror) cover the render, the review/approve logic, the reliability guards, and the content rules. The self-verification is measured, not asserted — on my labeled eval set (`make evals-llm` — 12 fixtures: 6 planted fabrications + 6 faithful items, run 3× each), it catches every fabrication across 3 consecutive runs: **18/18 (100% recall), 0/18 false positives**. The free label-blind baseline heuristic catches only **67% (4/6)** — that's the bar the model-based check has to clear, and does. Changes are run through an adversarial "try to break it" review before merge — which has caught real defects (e.g., a null-field crash on a specific render path) pre-ship.
 
 ## Architecture (one engine, two faces)
 
