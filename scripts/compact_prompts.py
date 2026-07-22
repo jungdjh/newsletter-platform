@@ -74,6 +74,29 @@ def get_feeds(newsletter: str) -> list[str]:
     return []
 
 
+def get_freshness_window(newsletter: str) -> tuple[int, int]:
+    """Per-newsletter freshness window (min_days, max_days) for freshness_floor.
+
+    Fast fields (AI, Big Tech) want a tight window; a slow field (nursing) wants
+    a wide one so a week with no hot news still surfaces relevant recent updates.
+    A platform audience can override via `min_window_days` / `max_window_days` in
+    its generated spec. Absent → the default (7, 21) — every existing newsletter
+    is unaffected. The sent-stories ledger separately blocks repeats, so a wide
+    window never re-runs old items; it only widens what's *eligible*."""
+    default = (7, 21)
+    import json as _json
+    from pathlib import Path as _Path
+    spec_path = _Path(__file__).resolve().parent.parent / "briefs" / f"{newsletter}.json"
+    if spec_path.exists():
+        spec = _json.loads(spec_path.read_text())
+        lo = spec.get("min_window_days")
+        hi = spec.get("max_window_days")
+        if lo is not None or hi is not None:
+            return (int(lo) if lo is not None else default[0],
+                    int(hi) if hi is not None else default[1])
+    return default
+
+
 def make_compact_prompt(newsletter: str) -> str:
     """Return the compact operational brief for the given newsletter.
 

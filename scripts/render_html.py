@@ -105,41 +105,122 @@ def _format_filed_from_published(published_at_iso: str | None) -> str:
     except (ValueError, OverflowError):
         return ""
 
+# Common font stacks
+SANS = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
+MONO = "ui-monospace,'SF Mono',Menlo,Consolas,monospace"
+SERIF = "Georgia, 'Times New Roman', serif"
+ARIAL_BLACK = "'Arial Black','Helvetica Neue',Arial,sans-serif"
+# Card News display face. 'Arial Black' is NOT a font family on iOS — Gmail iOS
+# falls through it to a light Helvetica, so the v7 headlines/masthead rendered
+# thin while the baked Archivo Black hero stayed heavy (the "fonts are wrong"
+# bug). This is a heavy web-safe sans that actually renders on iOS/Android/
+# Windows; pair it with font-weight:800 at each use site. The baked hero uses
+# Arimo Bold (Arial-metric) so hero and body read as one system in the inbox.
+CN_DISPLAY = "'Helvetica Neue', Helvetica, Arial, sans-serif"
+# Editorial serif display for the light pastel audiences. Georgia is the one
+# high-character serif that ships on every mail client + browser, so the sent
+# email and the demo site render identically with no webfont load, no external
+# request (leak-scan clean), and no base64 bloat. Iowan/Palatino refine it on
+# Apple devices where most mail is read; Times is the universal floor.
+DISPLAY_SERIF = "Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Times New Roman', serif"
+
+
 # --- High-contrast chassis --------------------------------------------------
 # Every newsletter shares ONE bulletproof structure — black canvas, white story
 # cards, a near-black hero card — so contrast + dark-mode survival are constant.
 # Per-audience identity is a single ACCENT color (from the brand), plus a light
 # TINT of it for pills/implications on white cards. The model David approved:
 # lock the chassis, swap the accent.
-def _chassis(accent: str, *, tint: str, tint_ink: str) -> dict[str, str]:
+def _mix_hex(h1: str, h2: str, t: float) -> str:
+    a = tuple(int(h1.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    b = tuple(int(h2.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    return "#%02X%02X%02X" % tuple(round(a[i] + (b[i] - a[i]) * t) for i in range(3))
+
+
+def _chassis(ch: dict) -> dict[str, str]:
+    """Expand a per-audience chassis block into the full render palette.
+
+    Two looks, keyed by the block's `mode`:
+      - "light": a pastel editorial canvas (warm cream / lavender / sage) with
+        WHITE story cards + dark ink and a dark hero color-block. Canvas-level
+        text flips to dark (canvas_ink). The researched newsletter aesthetic.
+      - "dark" (default): the near-black canvas + white cards, tinted per-subject
+        toward the accent. Used by the config-pack dailies and any block that omits
+        the light tokens — so {accent, tint, tint_ink} alone still works.
+    """
+    accent, tint, tint_ink = ch["accent"], ch["tint"], ch["tint_ink"]
+
+    if ch.get("mode") == "light":
+        canvas = ch["canvas_bg"]
+        canvas_ink = ch.get("canvas_ink", "#231F20")
+        card_ink = ch.get("card_ink", "#231F20")
+        hero = ch.get("hero_bg") or _mix_hex("#161310", accent, 0.22)  # dark editorial hero block
+        border = ch.get("border") or _mix_hex(canvas, "#000000", 0.12)
+        # On the DARK hero + dark TOC block, a saturated accent can match the block
+        # (navy-on-navy). Use a lightened accent for elements ON dark so they pop;
+        # the saturated accent stays for links/numerals on the WHITE cards.
+        hero_accent = ch.get("hero_accent") or _mix_hex(accent, "#FFFFFF", 0.42)
+        return {
+            "outer_bg": canvas, "card_bg": canvas,        # pastel gutter/canvas
+            "white": ch.get("card_bg", "#FFFFFF"),        # white story-card surface
+            "big_signal_bg": hero,
+            "big_signal_accent": hero_accent,
+            "primary": accent, "primary_tint": tint,
+            "ink": card_ink,                              # dark text on white cards + dark TOC block bg
+            "canvas_ink": canvas_ink,                     # dark text on the pastel canvas
+            "canvas_ink_muted": _mix_hex(canvas_ink, canvas, 0.42),
+            "ink_muted": _mix_hex(card_ink, "#FFFFFF", 0.42),
+            "ink_hairline": border,
+            "story_pill_bg": card_ink, "story_pill_fg": "#FFFFFF",
+            "track_tag_bg": tint, "track_tag_fg": tint_ink,
+            "card_border": border,
+            "implications_bg": tint, "implications_border": accent,
+            "big_signal_meta_color": "#B8B2A6", "big_signal_meta_pipe": "#5A5348",
+            "big_signal_body": "#F0ECE4",                 # near-white body on the dark hero
+            "big_signal_pill_border": hero_accent,
+            "footer_bg": hero,                            # footer band = the dark hero tone
+            "footer_brand_main": accent, "footer_brand_sub": "#FFFFFF", "footer_pipe": "#5A5348",
+            "wordmark_period": accent, "footer_wordmark_period": accent,
+            # Typography — light audiences read as an editorial magazine: a Georgia
+            # serif masthead + mixed-case serif headlines + big serif drop-numerals
+            # on the pastel canvas. Mono datelines stay the technical counterpoint.
+            # Serif tops out at bold, so weight 700 (900 would force ugly faux-bold).
+            "wordmark_font": DISPLAY_SERIF, "wordmark_weight": "700",
+            "display_font": DISPLAY_SERIF, "display_weight": "700",
+            "headline_transform": "none",   # editorial headlines are mixed-case
+            "numeral_font": DISPLAY_SERIF, "numeral_weight": "700",
+            # Serif headlines breathe a touch more than the Arial-Black dark look.
+            "hero_leading": "1.08", "story_leading": "1.12", "display_tracking": "-0.011em",
+        }
+
+    # --- dark (default) — near-black canvas tinted per-subject, white cards ---
+    canvas = ch.get("canvas_bg") or _mix_hex("#080808", accent, 0.10)
+    hero = ch.get("hero_bg") or _mix_hex("#141414", accent, 0.20)
     return {
-        "outer_bg": "#0A0A0A",
-        "card_bg": "#0A0A0A",            # the "paper"/gutter is the black canvas
-        "white": "#FFFFFF",              # white story-card surface
-        "big_signal_bg": "#141414",      # near-black hero card (lifted off the canvas)
-        "big_signal_bg_gradient_end": "#141414",  # flat — no gradient to get mangled
-        "big_signal_accent": accent,     # hero numeral, pills, CTA, headline
-        "primary": accent,               # numerals/links/top-bar on white cards
-        "primary_tint": tint,
-        "ink": "#0A0A0A",                # black text on white cards
-        "ink_muted": "#6B6B6B",
-        "ink_hairline": "#E8E8E8",       # hairline between items on the white Other-news card
-        "story_pill_bg": "#0A0A0A",
-        "story_pill_fg": "#FFFFFF",
-        "track_tag_bg": tint,            # light accent tint — pill on white cards + on black
-        "track_tag_fg": tint_ink,        # readable accent text on the tint
+        "outer_bg": canvas, "card_bg": canvas,
+        "white": "#FFFFFF",
+        "big_signal_bg": hero,
+        "big_signal_accent": accent,
+        "primary": accent, "primary_tint": tint,
+        "ink": "#0A0A0A",
+        "canvas_ink": "#FFFFFF", "canvas_ink_muted": "#B0B0B0",
+        "ink_muted": "#6B6B6B", "ink_hairline": "#E8E8E8",
+        "story_pill_bg": "#0A0A0A", "story_pill_fg": "#FFFFFF",
+        "track_tag_bg": tint, "track_tag_fg": tint_ink,
         "card_border": "#1A1A1A",
-        "implications_bg": tint,
-        "implications_border": accent,
-        "big_signal_meta_color": "#9A9A9A",
-        "big_signal_meta_pipe": "#444444",
-        "big_signal_body": "#ECECEC",    # near-white body on the dark hero
-        "big_signal_pill_border": accent,
-        "footer_brand_main": accent,
-        "footer_brand_sub": "#FFFFFF",
-        "footer_pipe": "#444444",
-        "wordmark_period": accent,
-        "footer_wordmark_period": accent,
+        "implications_bg": tint, "implications_border": accent,
+        "big_signal_meta_color": "#9A9A9A", "big_signal_meta_pipe": "#444444",
+        "big_signal_body": "#ECECEC", "big_signal_pill_border": accent,
+        "footer_bg": canvas,
+        "footer_brand_main": accent, "footer_brand_sub": "#FFFFFF", "footer_pipe": "#444444",
+        "wordmark_period": accent, "footer_wordmark_period": accent,
+        # Typography — dark audiences keep the punchy tech-briefing look: a heavy
+        # sans wordmark + uppercase Arial-Black headlines + heavy numerals.
+        "wordmark_font": SANS, "wordmark_weight": "900",
+        "display_font": ARIAL_BLACK, "display_weight": "900",
+        "headline_transform": "uppercase",
+        "numeral_font": ARIAL_BLACK, "numeral_weight": "900",
+        "hero_leading": "1.05", "story_leading": "1.08", "display_tracking": "-0.02em",
     }
 
 
@@ -157,7 +238,7 @@ def _load_palettes() -> dict[str, dict[str, str]]:
         chassis = entry.pop("chassis")
         palettes[key] = {
             **entry,
-            **_chassis(chassis["accent"], tint=chassis["tint"], tint_ink=chassis["tint_ink"]),
+            **_chassis(chassis),
         }
     return palettes
 
@@ -200,7 +281,11 @@ def _palette_from_theme(theme: dict) -> dict[str, str]:
     a single accent pulled from the spec's `theme` (primary preferred, else
     accent). The light tint + its ink are derived for readable pills on white."""
     accent = theme.get("primary") or theme.get("accent") or "#3B5BFF"
-    return _chassis(accent, tint=_tint(accent, 0.88), tint_ink=_mix(accent, "#000000", 0.30))
+    return _chassis({
+        "accent": accent,
+        "tint": _tint(accent, 0.88),
+        "tint_ink": _mix(accent, "#000000", 0.30),
+    })
 
 
 def _effective_palette(newsletter: str) -> dict[str, Any]:
@@ -243,12 +328,6 @@ WATCHLIST_COLORS = {
     "Leak":    "#DC2626",
     "Beta":    "#0D9488",
 }
-
-# Common font stacks
-SANS = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
-MONO = "ui-monospace,'SF Mono',Menlo,Consolas,monospace"
-SERIF = "Georgia, 'Times New Roman', serif"
-ARIAL_BLACK = "'Arial Black','Helvetica Neue',Arial,sans-serif"
 
 
 # --- Public API -------------------------------------------------------------
@@ -364,6 +443,13 @@ def _trim_other_news(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # --- HTML builders ----------------------------------------------------------
 
 def _build_html(palette, top_stories, other_news, meta, editor_concerns=None, *, include_reply_footer=True) -> str:
+    # Card News layout is a per-audience opt-in (branding entry `card_news: true`).
+    # Every other audience keeps the shared magazine layout below byte-for-byte —
+    # the flag is absent/false for them, so goldens and config packs are untouched.
+    if palette.get("card_news"):
+        return _build_html_cardnews(
+            palette, top_stories, other_news, meta, editor_concerns,
+            include_reply_footer=include_reply_footer)
     issue_str = f"{meta['issue_number']:03d}"
     parts: list[str] = []
     parts.append(_html_head(palette, meta, top_stories))
@@ -397,11 +483,21 @@ def _html_head(palette, meta, top_stories) -> str:
     issue_str = f"{meta['issue_number']:03d}"
     preheader_parts = [escape(s.get("headline", "")) for s in top_stories]
     preheader = " &middot; ".join(preheader_parts)
+    # Gmail iOS dark-mode fix. Gmail's app inverts `color`/`bgcolor` but leaves
+    # `background-image` (our hero/footer gradient) untouched, so near-white text
+    # on those gradient surfaces gets darkened to near-black-on-dark = invisible
+    # (Story-1 body + footer title/tagline). It also ignores `color-scheme`, so the
+    # lock above doesn't help there. When Gmail inverts an element it tags it
+    # `data-ogsc`; `.dm-light` (below) marks the affected light-on-gradient text and
+    # re-asserts it white ONLY in that inverted state. Inert on Apple Mail/Outlook/
+    # Chrome (they never emit data-ogsc). Only Gmail-hosted inboxes keep <style> —
+    # our recipient is a native gmail.com address, so this path is supported.
     return f"""<!doctype html><html lang="en"><head>\
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">\
 <meta name="color-scheme" content="dark"><meta name="supported-color-schemes" content="dark">\
 <title>{escape(palette['name'])} &middot; &#8470; {issue_str} &mdash; {escape(meta['date_dd_mm_yy'])}</title>\
-<style>:root{{color-scheme:dark;supported-color-schemes:dark;}}</style>\
+<style>:root{{color-scheme:dark;supported-color-schemes:dark;}}\
+[data-ogsc] .dm-light,.dm-light[data-ogsc]{{color:#FFFFFF!important;}}</style>\
 </head><body bgcolor="{palette['outer_bg']}" style="margin:0; padding:0; background:{palette['outer_bg']}; -webkit-font-smoothing:antialiased;">\
 <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">{preheader}</div>"""
 
@@ -470,8 +566,8 @@ def _html_editor_concerns(palette, concerns: dict[str, Any]) -> str:
 def _html_masthead(palette, issue_str, meta) -> str:
     return f"""<tr><td bgcolor="{palette['card_bg']}" style="background:{palette['card_bg']}; padding:26px 28px 0 28px;">\
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>\
-<td valign="middle" style="vertical-align:middle; font-family:{SANS}; font-size:12px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; color:#B0B0B0; line-height:1;">\
-{escape(palette['category_main'])} <span style="color:#444444; padding:0 6px;">/</span><span style="color:#8C8C8C;">{escape(palette['category_sub'])}</span>\
+<td valign="middle" style="vertical-align:middle; font-family:{SANS}; font-size:12px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; color:{palette['canvas_ink_muted']}; line-height:1;">\
+{escape(palette['category_main'])} <span style="color:{palette['canvas_ink_muted']}; padding:0 6px;">/</span><span style="color:{palette['canvas_ink_muted']};">{escape(palette['category_sub'])}</span>\
 </td>\
 <td align="right" valign="middle" style="font-family:{MONO}; font-size:11px; font-weight:700; letter-spacing:0.04em; color:{palette['primary']}; line-height:1; white-space:nowrap;">No.&nbsp;{issue_str}&nbsp;&nbsp;&middot;&nbsp;&nbsp;{escape(meta['date_dd_mm_yy'])}</td>\
 </tr></table></td></tr>"""
@@ -479,14 +575,16 @@ def _html_masthead(palette, issue_str, meta) -> str:
 
 def _html_wordmark(palette) -> str:
     name = palette["name"]
+    font = palette.get("wordmark_font", SANS)
+    weight = palette.get("wordmark_weight", "900")
     return f"""<tr><td bgcolor="{palette['card_bg']}" style="background:{palette['card_bg']}; padding:16px 28px 0 28px;">\
-<div style="font-family:{SANS}; font-size:50px; font-weight:900; letter-spacing:-0.03em; line-height:0.96; text-transform:uppercase; color:#FFFFFF;">\
+<div style="font-family:{font}; font-size:50px; font-weight:{weight}; letter-spacing:-0.03em; line-height:0.96; text-transform:uppercase; color:{palette['canvas_ink']};">\
 {escape(name)}<span style="color:{palette['wordmark_period']};">.</span></div></td></tr>"""
 
 
 def _html_tagline(palette) -> str:
     return f"""<tr><td bgcolor="{palette['card_bg']}" style="background:{palette['card_bg']}; padding:12px 28px 0 28px;">\
-<div style="font-family:{SANS}; font-size:14px; font-weight:500; line-height:1.5; color:#9A9A9A;">{palette['subtitle']}</div></td></tr>"""
+<div style="font-family:{SANS}; font-size:14px; font-weight:500; line-height:1.5; color:{palette['canvas_ink_muted']};">{palette['subtitle']}</div></td></tr>"""
 
 
 def _html_divider_row(palette) -> str:
@@ -504,10 +602,10 @@ def _html_edition_strip(palette, meta) -> str:
     day_label = f"{weekday}&nbsp;{date.replace('.','&nbsp;')}" if weekday else date
     return f"""<tr><td bgcolor="{palette['card_bg']}" style="background:{palette['card_bg']}; padding:12px 28px 22px 28px;">\
 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>\
-<td valign="middle" style="font-family:{MONO}; font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#B0B0B0; line-height:1;">\
+<td valign="middle" style="font-family:{MONO}; font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:{palette['canvas_ink_muted']}; line-height:1;">\
 {day_label}</td>\
-<td align="right" valign="middle" style="font-family:{MONO}; font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:#8C8C8C; line-height:1; white-space:nowrap;">\
-<span style="color:#FFFFFF;">{min_read}</span>&nbsp;min&nbsp;read</td></tr></table></td></tr>"""
+<td align="right" valign="middle" style="font-family:{MONO}; font-size:11px; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:{palette['canvas_ink_muted']}; line-height:1; white-space:nowrap;">\
+<span style="color:{palette['canvas_ink']};">{min_read}</span>&nbsp;min&nbsp;read</td></tr></table></td></tr>"""
 
 
 def _html_toc(palette, top_stories, other_news) -> str:
@@ -579,15 +677,14 @@ def _html_big_signal_card(palette, story) -> str:
     # Meta strip: dateline only (the "Filed HH:MM CT" stamp was dropped — it was
     # inconsistent across stories and added noise).
     meta_inner = dateline
-    # Gradient styles: gmail/apple mail render the linear-gradient; outlook
-    # desktop strips it and falls back to the solid bgcolor attribute. Inner
-    # cells that set their own bgcolor will overlay the gradient — that's
-    # intentional for distinct elements (pills, numeral cell).
-    gradient_end = p.get("big_signal_bg_gradient_end", p["big_signal_bg"])
+    # Solid background — NO CSS gradient. Gmail iOS dark mode fails to recognize a
+    # linear-gradient as a background: it darkens the text but leaves the gradient
+    # dark, so light text on this block rendered dark-on-dark (Story-1 body vanished).
+    # The gradient was a no-op anyway (both stops = big_signal_bg), so a solid fill
+    # is pixel-identical on every client AND survives Gmail's partial inversion.
     big_signal_bg_style = (
         f'background-color:{p["big_signal_bg"]}; '
-        f'background-image:linear-gradient(135deg, {p["big_signal_bg"]} 0%, {gradient_end} 100%); '
-        f'background:linear-gradient(135deg, {p["big_signal_bg"]} 0%, {gradient_end} 100%) {p["big_signal_bg"]};'
+        f'background:{p["big_signal_bg"]};'
     )
     return (
         f'<tr><td bgcolor="{p["card_bg"]}" style="background:{p["card_bg"]}; padding:24px 16px 0 16px;">'
@@ -595,7 +692,7 @@ def _html_big_signal_card(palette, story) -> str:
         # Numeral + tags row
         f'<tr><td style="padding:24px 24px 0 24px;">'
         f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>'
-        f'<td valign="middle" width="90" align="left" style="padding:0; font-family:{ARIAL_BLACK}; font-size:46px; font-weight:900; color:{p["big_signal_accent"]}; line-height:1; letter-spacing:-0.02em;">{num_str}</td>'
+        f'<td valign="middle" width="90" align="left" style="padding:0; font-family:{p.get("numeral_font", ARIAL_BLACK)}; font-size:46px; font-weight:{p.get("numeral_weight", "900")}; color:{p["big_signal_accent"]}; line-height:1; letter-spacing:-0.02em;">{num_str}</td>'
         f'<td align="right" valign="middle"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
         f'<td bgcolor="{p["big_signal_accent"]}" style="background:{p["big_signal_accent"]}; padding:6px 11px; border-radius:999px; font-family:{SANS}; font-size:10px; font-weight:800; letter-spacing:0.12em; text-transform:uppercase; color:{p["big_signal_bg"]}; line-height:1;">Big&nbsp;Signal</td>'
         f'<td bgcolor="{p["big_signal_bg"]}" style="width:6px; font-size:0; line-height:0; background:{p["big_signal_bg"]};">&nbsp;</td>'
@@ -606,9 +703,9 @@ def _html_big_signal_card(palette, story) -> str:
         f'<div style="font-family:{MONO}; font-size:10px; font-weight:600; letter-spacing:0.10em; text-transform:uppercase; color:{p["big_signal_meta_color"]}; line-height:1;">{meta_inner}</div></td></tr>'
         + hero_html
         # Headline — bold condensed display in the accent color (Half Baked DNA)
-        + f'<tr><td style="padding:20px 24px 0 24px; font-family:{ARIAL_BLACK}; font-size:32px; font-weight:900; line-height:1.05; letter-spacing:-0.02em; text-transform:uppercase; color:{p["big_signal_accent"]};">{headline}</td></tr>'
+        + f'<tr><td style="padding:20px 24px 0 24px; font-family:{p.get("display_font", ARIAL_BLACK)}; font-size:32px; font-weight:{p.get("display_weight", "900")}; line-height:{p.get("hero_leading", "1.05")}; letter-spacing:{p.get("display_tracking", "-0.02em")}; text-transform:{p.get("headline_transform", "uppercase")}; color:{p["big_signal_accent"]};">{headline}</td></tr>'
         # Summary
-        + f'<tr><td style="padding:14px 24px 0 24px; font-family:{SANS}; font-size:15px; line-height:1.6; color:{p["big_signal_body"]};">{summary}</td></tr>'
+        + f'<tr><td class="dm-light" style="padding:14px 24px 0 24px; font-family:{SANS}; font-size:15px; line-height:1.6; color:{p["big_signal_body"]};">{summary}</td></tr>'
         + korean_takeaway_html
         # Implications white inset — only when present (see implications_html)
         + implications_html
@@ -657,7 +754,7 @@ def _html_standard_card(palette, story, idx) -> str:
         f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="{p["white"]}" style="background:{p["white"]}; border:1px solid {p["card_border"]}; border-radius:6px;">'
         f'<tr><td style="padding:22px 24px 0 24px;">'
         f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>'
-        f'<td valign="middle" bgcolor="{p["white"]}" width="90" align="left" style="background:{p["white"]}; padding:0; font-family:{ARIAL_BLACK}; font-size:46px; font-weight:900; color:{p["primary"]}; line-height:1; letter-spacing:-0.02em;">{num_str}</td>'
+        f'<td valign="middle" bgcolor="{p["white"]}" width="90" align="left" style="background:{p["white"]}; padding:0; font-family:{p.get("numeral_font", ARIAL_BLACK)}; font-size:46px; font-weight:{p.get("numeral_weight", "900")}; color:{p["primary"]}; line-height:1; letter-spacing:-0.02em;">{num_str}</td>'
         f'<td align="right" valign="middle"><table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
         f'<td bgcolor="{p["story_pill_bg"]}" style="background:{p["story_pill_bg"]}; padding:6px 11px; border-radius:999px; font-family:{SANS}; font-size:10px; font-weight:800; letter-spacing:0.12em; text-transform:uppercase; color:{p["story_pill_fg"]}; line-height:1;">Story</td>'
         f'<td bgcolor="{p["white"]}" style="width:6px; font-size:0; line-height:0; background:{p["white"]};">&nbsp;</td>'
@@ -665,7 +762,7 @@ def _html_standard_card(palette, story, idx) -> str:
         f'</tr></table></td></tr></table></td></tr>'
         f'<tr><td style="padding:12px 24px 0 24px;"><div style="font-family:{MONO}; font-size:10px; font-weight:600; letter-spacing:0.10em; text-transform:uppercase; color:{p["ink_muted"]}; line-height:1;">{meta_inner}</div></td></tr>'
         + hero_html
-        + f'<tr><td style="padding:20px 24px 0 24px; font-family:{ARIAL_BLACK}; font-size:26px; font-weight:900; letter-spacing:-0.02em; line-height:1.08; text-transform:uppercase; color:{p["ink"]};">{headline}</td></tr>'
+        + f'<tr><td style="padding:20px 24px 0 24px; font-family:{p.get("display_font", ARIAL_BLACK)}; font-size:26px; font-weight:{p.get("display_weight", "900")}; letter-spacing:{p.get("display_tracking", "-0.02em")}; line-height:{p.get("story_leading", "1.08")}; text-transform:{p.get("headline_transform", "uppercase")}; color:{p["ink"]};">{headline}</td></tr>'
         + f'<tr><td style="padding:12px 24px 0 24px; font-family:{SANS}; font-size:15px; line-height:1.6; color:{p["ink"]};">{summary}</td></tr>'
         + korean_takeaway_html
         + implications_html
@@ -715,12 +812,19 @@ def _render_korean_takeaway(takeaway: str | None, palette, *, on_dark_card: bool
     # OS-default Korean font picks up via fallback (same as the rest of the
     # email's Korean handling).
     body_color = "#FFFFFF" if on_dark_card else p["ink"]
+    # korean_takeaway may be a single string (legacy) or a list of short Korean
+    # lines that mirror the story's implications (one per bullet). Render each as
+    # its own line inside the Key Takeaway block.
+    lines = takeaway if isinstance(takeaway, list) else str(takeaway).splitlines()
+    body_html = "<br>".join(escape(str(t)) for t in lines if str(t).strip())
+    if not body_html:
+        return ""
     return (
         f'<tr><td style="padding:14px 24px 0 24px;">'
         f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-left:3px solid {p["big_signal_accent"]};">'
         f'<tr><td style="padding:8px 0 8px 14px;">'
         f'<div style="font-family:{MONO}; font-size:10px; font-weight:700; letter-spacing:0.16em; text-transform:uppercase; color:{p["big_signal_accent"]}; line-height:1; padding-bottom:6px;">핵심&nbsp;요약 / Key Takeaway</div>'
-        f'<div style="font-family:{SANS}; font-size:14px; font-weight:500; line-height:1.55; color:{body_color};">{escape(takeaway)}</div>'
+        f'<div style="font-family:{SANS}; font-size:14px; font-weight:500; line-height:1.55; color:{body_color};">{body_html}</div>'
         f'</td></tr></table></td></tr>'
     )
 
@@ -782,31 +886,433 @@ def _html_footer(palette, issue_str, meta, *, include_reply_footer=True) -> str:
     # include_reply_footer == "sending mode": show the reply line + the
     # "internal use only" notice. Demo/public (GitHub) render omits both.
     reply_row = (
-        f'<tr><td style="padding:18px 24px 0 24px; font-family:{SANS}; font-size:13px; font-weight:500; line-height:1.55; color:#D4CACD;">Reply to this email with feedback &mdash; <a href="mailto:{FEEDBACK_EMAIL}?subject={feedback_subject}" style="color:{p["footer_brand_main"]}; text-decoration:underline;">{FEEDBACK_EMAIL}</a></td></tr>'
+        f'<tr><td class="dm-light" style="padding:18px 24px 0 24px; font-family:{SANS}; font-size:13px; font-weight:500; line-height:1.55; color:#D4CACD;">Reply to this email with feedback &mdash; <a href="mailto:{FEEDBACK_EMAIL}?subject={feedback_subject}" style="color:{p["footer_brand_main"]}; text-decoration:underline;">{FEEDBACK_EMAIL}</a></td></tr>'
         if include_reply_footer else ""
     )
-    internal_label = "Internal&nbsp;use&nbsp;only&nbsp;&middot;&nbsp;Not&nbsp;for&nbsp;redistribution" if include_reply_footer else ""
-    gradient_end = p.get("big_signal_bg_gradient_end", p["big_signal_bg"])
+    # Confidentiality line — audience-configurable via the palette's footer_legal.
+    # Defaults to the internal-intel notice (so the config-pack newsletters are
+    # unchanged); external audiences set footer_legal="" to omit it entirely.
+    _legal = p.get("footer_legal", "Internal use only · Not for redistribution")
+    internal_label = escape(_legal).replace(" ", "&nbsp;").replace("·", "&middot;") if (include_reply_footer and _legal) else ""
+    # Solid background — see _html_big_signal_card: a CSS gradient breaks Gmail iOS
+    # dark mode (dark-on-dark). The footer shares big_signal_bg with the hero block.
     footer_bg_style = (
         f'background-color:{p["big_signal_bg"]}; '
-        f'background-image:linear-gradient(135deg, {p["big_signal_bg"]} 0%, {gradient_end} 100%); '
-        f'background:linear-gradient(135deg, {p["big_signal_bg"]} 0%, {gradient_end} 100%) {p["big_signal_bg"]};'
+        f'background:{p["big_signal_bg"]};'
     )
     return (
         f'<tr><td bgcolor="{p["card_bg"]}" style="background:{p["card_bg"]}; padding:24px 16px 24px 16px;">'
         f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" bgcolor="{p["big_signal_bg"]}" style="{footer_bg_style} border-radius:6px;">'
         f'<tr><td style="padding:28px 24px 12px 24px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>'
-        f'<td valign="middle" style="vertical-align:middle; font-family:{SANS}; font-size:13px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; color:{p["footer_brand_main"]}; line-height:1;">{escape(p["category_main"])}&nbsp;<span style="color:{p["footer_pipe"]};">/</span>&nbsp;<span style="color:{p["footer_brand_sub"]};">{escape(p["category_sub"])}</span></td>'
+        f'<td valign="middle" style="vertical-align:middle; font-family:{SANS}; font-size:13px; font-weight:700; letter-spacing:0.12em; text-transform:uppercase; color:{p["footer_brand_main"]}; line-height:1;">{escape(p["category_main"])}&nbsp;<span style="color:{p["footer_pipe"]};">/</span>&nbsp;<span class="dm-light" style="color:{p["footer_brand_sub"]};">{escape(p["category_sub"])}</span></td>'
         f'<td align="right" valign="middle" style="font-family:{MONO}; font-size:10px; font-weight:600; letter-spacing:0.06em; text-transform:uppercase; color:#A89398; line-height:1; white-space:nowrap;">No.&nbsp;{issue_str}</td>'
         f'</tr></table></td></tr>'
-        f'<tr><td style="padding:18px 24px 0 24px;"><div style="font-family:{SANS}; font-size:34px; font-weight:900; letter-spacing:-0.03em; line-height:1; color:#FFFFFF;">{escape(p["name"])}<span style="color:{p["footer_wordmark_period"]};">.</span></div></td></tr>'
-        f'<tr><td style="padding:14px 24px 0 24px; font-family:{SANS}; font-size:14px; font-weight:500; line-height:1.55; color:#D4CACD;">{escape(tagline)}</td></tr>'
+        f'<tr><td style="padding:18px 24px 0 24px;"><div class="dm-light" style="font-family:{SANS}; font-size:34px; font-weight:900; letter-spacing:-0.03em; line-height:1; color:#FFFFFF;">{escape(p["name"])}<span style="color:{p["footer_wordmark_period"]};">.</span></div></td></tr>'
+        f'<tr><td class="dm-light" style="padding:14px 24px 0 24px; font-family:{SANS}; font-size:14px; font-weight:500; line-height:1.55; color:#D4CACD;">{escape(tagline)}</td></tr>'
         f'{reply_row}'
         f'<tr><td style="padding:14px 24px 24px 24px;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%"><tr>'
         f'<td valign="middle" style="font-family:{MONO}; font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:#A89398; line-height:1.5;">{internal_label}</td>'
         f'<td align="right" valign="middle" style="font-family:{MONO}; font-size:10px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; color:#A89398; line-height:1.5;">{escape(meta["date_dd_mm_yy"])}</td>'
         f'</tr></table></td></tr></table></td></tr>'
     )
+
+
+# --- Card News layout (per-audience opt-in) --------------------------------
+# A photo-forward "Korean Card News" look: discrete rounded cards on a light
+# neutral canvas. Structure locked in design-spec-v7.html (David, 2026-07-15):
+#   masthead card (dark) → story cards (B split: photo band + dark panel) →
+#   Other News (light 2-up grid) → footer card (dark).
+# Every word stays real HTML text on a solid-color surface — no text over the
+# photo, no CSS gradients — so it survives image-blocking and Gmail's dark-mode
+# partial inversion (the same hard-won constraints as the magazine layout).
+# The full-bleed "A" hero (text baked over the photo) is a later phase: it ships
+# as a pre-composited PNG because mail clients can't render the overlay. Until
+# then Story 01 uses the same B split card as 02/03, distinguished by its
+# "01 · BIG SIGNAL" numbering — a routing seam Phase 3 slots the PNG into.
+
+def _cn_tokens(p: dict) -> dict[str, str]:
+    """Card-news color tokens: the spec's neutral canvas + dark cards, with the
+    teal family sourced from the audience accent so any audience can opt in with
+    its own brand color. Nursing's accent IS the spec teal, so it matches v7."""
+    return {
+        "page": "#F2F2F0", "canvas": "#E9E9E6",
+        "ink": "#0A0A0A", "panel": "#141414", "krbg": "#1A1A1A",
+        "teal": p.get("big_signal_accent", "#0EA5A5"),
+        "teal_deep": p.get("track_tag_fg", "#0A7373"),
+        "teal_pale": p.get("track_tag_bg", "#D6F5F5"),
+        "gray": "#6B6B6B", "line": "#E8E8E8", "body_gray": "#CFCFCF",
+        "chip_gray": "#9A9A9A", "white": "#FFFFFF",
+    }
+
+
+def _cn_row(inner: str) -> str:
+    return f'<tr><td>{inner}</td></tr>'
+
+
+def _cn_spacer(h: int = 20) -> str:
+    return f'<tr><td height="{h}" style="height:{h}px; line-height:{h}px; font-size:0;">&nbsp;</td></tr>'
+
+
+def _cn_source_label(story: dict) -> str:
+    """Uppercase source line for a card ('SOURCE · ATI.COM'). Prefer an explicit
+    source_name/publisher; else the source_url's domain; else nothing."""
+    lbl = story.get("source_name") or story.get("publisher")
+    if isinstance(lbl, str) and lbl.strip():
+        return escape(lbl.strip().upper())
+    url = _safe_url(story.get("source_url"))
+    if not url:
+        return ""
+    from urllib.parse import urlparse
+    net = urlparse(url).netloc.lower()
+    if net.startswith("www."):
+        net = net[4:]
+    return escape(net.upper())
+
+
+def _cn_pill(t: dict, href: Any, label: str, *, dark: bool) -> str:
+    bg = t["ink"] if dark else t["white"]
+    fg = "#FFFFFF" if dark else t["ink"]
+    size = "11.5px" if dark else "12.5px"
+    pad = "8px 14px" if dark else "10px 18px"
+    safe = escape(_safe_url(href))
+    href_attr = f' href="{safe}"' if safe else ""
+    return (
+        f'<a{href_attr} style="display:inline-block; background:{bg}; color:{fg}; '
+        f'font-family:{CN_DISPLAY}; font-weight:800; font-size:{size}; padding:{pad}; border-radius:999px; '
+        f'text-decoration:none; line-height:1;">{label}</a>'
+    )
+
+
+def _cn_bullets(t: dict, implications) -> str:
+    items = [b for b in (implications or []) if isinstance(b, str) and b.strip()][:2]
+    if not items:
+        return ""
+    inner: list[str] = []
+    for i, b in enumerate(items):
+        pt = "9" if i else "0"
+        inner.append(
+            f'<tr><td valign="top" width="18" style="width:18px; padding-top:{pt}px; '
+            f'font-family:{SANS}; font-size:13px; font-weight:700; color:{t["teal"]}; line-height:1.5;">&rarr;</td>'
+            f'<td valign="top" style="padding-top:{pt}px; font-family:{SANS}; font-size:13px; '
+            f'line-height:1.5; color:#EDEDED;">{escape(b)}</td></tr>'
+        )
+    return (
+        f'<tr><td style="padding:14px 28px 0 28px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">'
+        + "".join(inner) +
+        "</table></td></tr>"
+    )
+
+
+def _cn_korean(t: dict, takeaway) -> str:
+    if not takeaway:
+        return ""
+    lines = takeaway if isinstance(takeaway, list) else str(takeaway).splitlines()
+    body = "<br>".join(escape(str(x)) for x in lines if str(x).strip())
+    if not body:
+        return ""
+    return (
+        f'<tr><td style="padding:16px 28px 0 28px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+        f'bgcolor="{t["krbg"]}" style="background:{t["krbg"]};">'
+        f'<tr><td style="padding:12px 16px 12px 16px; border-left:3px solid {t["teal"]};">'
+        f'<div style="font-family:{MONO}; font-size:10.5px; letter-spacing:0.14em; color:{t["chip_gray"]}; line-height:1;">'
+        f'핵심&nbsp;요약 / KEY TAKEAWAY</div>'
+        f'<div style="font-family:{SANS}; font-size:13px; line-height:1.75; color:{t["teal_pale"]}; padding-top:7px;">{body}</div>'
+        f'</td></tr></table></td></tr>'
+    )
+
+
+def _cn_masthead_card(t: dict, p: dict, meta: dict, issue_str: str) -> str:
+    main = escape(p.get("category_main", p["name"])).upper()
+    sub = escape(p.get("category_sub", "")).upper()
+    sep = f' <span style="color:{t["teal"]};">/</span> {sub}' if sub else ""
+    kline = (
+        f'{main}{sep}&nbsp;&nbsp;&middot;&nbsp;&nbsp;No.&nbsp;{issue_str}'
+        f'&nbsp;&nbsp;&middot;&nbsp;&nbsp;{escape(meta["date_dd_mm_yy"])}'
+    )
+    subtitle = escape(p.get("subtitle", ""))
+    subtitle_row = (
+        f'<tr><td style="padding:8px 28px 0 28px; font-family:{SANS}; font-size:12.5px; '
+        f'color:#ABABAB; line-height:1.5;">{subtitle}</td></tr>'
+    ) if subtitle else ""
+    return (
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+        f'bgcolor="{t["ink"]}" style="background:{t["ink"]}; border-radius:10px;">'
+        f'<tr><td style="padding:26px 28px 0 28px; font-family:{MONO}; font-size:11px; '
+        f'letter-spacing:0.13em; color:{t["chip_gray"]}; line-height:1.4;">{kline}</td></tr>'
+        f'<tr><td style="padding:10px 28px 0 28px; font-family:{CN_DISPLAY}; font-weight:800; font-size:30px; '
+        f'letter-spacing:-0.02em; line-height:1.05; color:#FFFFFF;">{escape(p["name"])}'
+        f'<span style="color:{t["teal"]};">.</span></td></tr>'
+        + subtitle_row
+        + '<tr><td style="height:24px; line-height:24px; font-size:0;">&nbsp;</td></tr>'
+        + "</table>"
+    )
+
+
+def _cn_story_card(t: dict, p: dict, story: dict, idx: int) -> str:
+    num = f"{idx+1:02d}"
+    label = "BIG&nbsp;SIGNAL" if idx == 0 else "STORY"
+    headline = escape(story.get("headline", ""))
+    summary = escape(story.get("summary", ""))
+    kicker = escape(story.get("kicker") or story.get("track", ""))
+    source_url = story.get("source_url")
+    hero_url = _safe_url(story.get("hero_image_url"))
+
+    # Photo band. Native aspect ratio at full card width (email clients don't
+    # honor object-fit crops); explicit width+height from the sourcing step
+    # prevents reflow. Rounded top corners to match the card. The hard 240px
+    # cover-band in the spec is a Phase-3 server-side crop; native ratio here.
+    photo_html = ""
+    has_photo = bool(hero_url)
+    if has_photo:
+        try:
+            w = int(story.get("hero_image_w") or 0)
+            h = int(story.get("hero_image_h") or 0)
+        except (TypeError, ValueError):
+            w = h = 0
+        height_attr = f' height="{round(560 * h / w)}"' if w > 0 and h > 0 else ""
+        safe_src = escape(hero_url)
+        safe_href = escape(_safe_url(source_url))
+        img = (
+            f'<img src="{safe_src}" width="560"{height_attr} alt="{headline}" '
+            f'style="display:block; width:100%; max-width:100%; height:auto; border:0; '
+            f'border-radius:10px 10px 0 0;">'
+        )
+        img = f'<a href="{safe_href}" style="text-decoration:none;">{img}</a>' if safe_href else img
+        photo_html = f'<tr><td style="padding:0; font-size:0; line-height:0;">{img}</td></tr>'
+
+    meta_pt = "20" if has_photo else "26"
+    meta_row = (
+        f'<tr><td style="padding:{meta_pt}px 28px 0 28px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
+        f'<td valign="middle" style="font-family:{CN_DISPLAY}; font-weight:800; font-size:30px; color:{t["teal"]}; line-height:1;">{num}</td>'
+        f'<td width="10" style="width:10px; font-size:0;">&nbsp;</td>'
+        f'<td valign="middle"><span style="display:inline-block; background:{t["teal"]}; color:#FFFFFF; '
+        f'font-family:{MONO}; font-size:10.5px; letter-spacing:0.14em; padding:4px 8px; line-height:1;">{label}</span></td>'
+        f'</tr></table></td></tr>'
+    )
+    kicker_row = (
+        f'<tr><td style="padding:12px 28px 0 28px; font-family:{MONO}; font-size:11px; '
+        f'letter-spacing:0.18em; text-transform:uppercase; color:{t["chip_gray"]}; line-height:1.4;">{kicker}</td></tr>'
+    ) if kicker else ""
+    title_row = (
+        f'<tr><td style="padding:9px 28px 0 28px; font-family:{CN_DISPLAY}; font-weight:800; font-size:24px; '
+        f'line-height:1.32; letter-spacing:-0.02em; color:#FFFFFF;">{headline}</td></tr>'
+    )
+    summary_row = (
+        f'<tr><td style="padding:16px 28px 0 28px; font-family:{SANS}; font-size:14px; '
+        f'line-height:1.65; color:{t["body_gray"]};">{summary}</td></tr>'
+    ) if summary else ""
+    bullets_row = _cn_bullets(t, story.get("implications"))
+    korean_row = _cn_korean(t, story.get("korean_takeaway")) if p.get("wants_korean") else ""
+    cta_row = (
+        f'<tr><td style="padding:20px 28px 0 28px;">'
+        f'{_cn_pill(t, source_url, "Read the full story&nbsp;&nbsp;&rarr;", dark=False)}</td></tr>'
+    )
+    src = _cn_source_label(story)
+    source_row = (
+        f'<tr><td style="padding:16px 28px 28px 28px; font-family:{MONO}; font-size:10.5px; '
+        f'letter-spacing:0.05em; color:#8A8A8A; line-height:1.4;">SOURCE&nbsp;&middot;&nbsp;{src}</td></tr>'
+    ) if src else (
+        '<tr><td style="height:28px; line-height:28px; font-size:0;">&nbsp;</td></tr>'
+    )
+    return (
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+        f'bgcolor="{t["panel"]}" style="background:{t["panel"]}; border-radius:10px;">'
+        + photo_html + meta_row + kicker_row + title_row + summary_row
+        + bullets_row + korean_row + cta_row + source_row
+        + "</table>"
+    )
+
+
+def _cn_little_card(t: dict, item: dict) -> str:
+    track = escape(item.get("track", ""))
+    headline = escape(item.get("headline", ""))
+    # Real Other-News items carry `subtitle` (a one-liner); `summary` is stripped
+    # upstream by _trim_other_news. Prefer subtitle, fall back to summary.
+    blurb = escape(item.get("subtitle") or item.get("summary") or "")
+    source_url = item.get("source_url")
+    head_inner = headline
+    safe_href = escape(_safe_url(source_url))
+    if safe_href:
+        head_inner = f'<a href="{safe_href}" style="color:{t["ink"]}; text-decoration:none;">{headline}</a>'
+    eyebrow = (
+        f'<div style="font-family:{MONO}; font-size:11px; letter-spacing:0.16em; '
+        f'text-transform:uppercase; color:{t["teal_deep"]}; line-height:1.3;">{track}</div>'
+    ) if track else ""
+    blurb_div = (
+        f'<div style="font-family:{SANS}; font-size:12.5px; color:{t["gray"]}; '
+        f'line-height:1.6; padding-top:10px;">{blurb}</div>'
+    ) if blurb else ""
+    return (
+        f'<td valign="top" width="272" style="width:272px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+        f'bgcolor="{t["white"]}" style="background:{t["white"]}; border:1px solid {t["line"]};">'
+        # teal top-accent row on the little card (not the container)
+        f'<tr><td height="3" bgcolor="{t["teal"]}" style="height:3px; line-height:3px; font-size:0; background:{t["teal"]};">&nbsp;</td></tr>'
+        f'<tr><td style="padding:16px;">'
+        + eyebrow +
+        f'<div style="font-family:{CN_DISPLAY}; font-weight:800; font-size:15.5px; line-height:1.45; '
+        f'color:{t["ink"]}; padding-top:10px;">{head_inner}</div>'
+        + blurb_div +
+        f'<div style="padding-top:14px;">{_cn_pill(t, source_url, "Read the full story&nbsp;&nbsp;&rarr;", dark=True)}</div>'
+        f'</td></tr></table></td>'
+    )
+
+
+def _cn_other_news_card(t: dict, p: dict, items: list) -> str:
+    n = len(items)
+    label = f'Other News &middot; {n} {"story" if n == 1 else "stories"}'
+    cells = [_cn_little_card(t, it) for it in items]
+    grid_rows: list[str] = []
+    for i in range(0, len(cells), 2):
+        left = cells[i]
+        right = cells[i + 1] if i + 1 < len(cells) else '<td width="272" style="width:272px;">&nbsp;</td>'
+        grid_rows.append(
+            f'<tr>{left}<td width="16" style="width:16px; font-size:0;">&nbsp;</td>{right}</tr>'
+        )
+        if i + 2 < len(cells):
+            grid_rows.append('<tr><td colspan="3" height="16" style="height:16px; line-height:16px; font-size:0;">&nbsp;</td></tr>')
+    return (
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+        f'bgcolor="{t["white"]}" style="background:{t["white"]}; border-radius:10px;">'
+        f'<tr><td style="padding:26px 28px 16px 28px; font-family:{MONO}; font-size:11px; '
+        f'letter-spacing:0.16em; text-transform:uppercase; color:{t["gray"]}; line-height:1;">{label}</td></tr>'
+        f'<tr><td style="padding:0 28px 30px 28px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">'
+        + "".join(grid_rows) +
+        "</table></td></tr></table>"
+    )
+
+
+def _cn_footer_card(t: dict, p: dict, meta: dict, issue_str: str, include_reply_footer: bool) -> str:
+    name = escape(p["name"])
+    tagline = escape(p.get("footer_tagline", f'Curated for {p.get("category_main", name)} readers.'))
+    reply_row = ""
+    if include_reply_footer:
+        reply_row = (
+            f'<tr><td style="padding:6px 28px 0 28px; font-family:{SANS}; font-size:12px; '
+            f'color:#9A9A9A; line-height:1.7;">Reply with feedback &mdash; '
+            f'<a href="mailto:{FEEDBACK_EMAIL}" style="color:{t["teal"]}; text-decoration:none;">{FEEDBACK_EMAIL}</a></td></tr>'
+        )
+    return (
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+        f'bgcolor="{t["ink"]}" style="background:{t["ink"]}; border-radius:10px;">'
+        f'<tr><td style="padding:22px 28px 0 28px; font-family:{CN_DISPLAY}; font-weight:800; font-size:16px; '
+        f'color:#FFFFFF; line-height:1;">{name}<span style="color:{t["teal"]};">.</span></td></tr>'
+        f'<tr><td style="padding:10px 28px 0 28px; font-family:{SANS}; font-size:12.5px; '
+        f'color:#9A9A9A; line-height:1.7;">{tagline}</td></tr>'
+        + reply_row +
+        f'<tr><td style="padding:12px 28px 24px 28px; font-family:{MONO}; font-size:10.5px; '
+        f'letter-spacing:0.09em; color:#8A8A8A; line-height:1;">No.&nbsp;{issue_str}&nbsp;&nbsp;&middot;&nbsp;&nbsp;{escape(meta["date_dd_mm_yy"])}</td></tr>'
+        + "</table>"
+    )
+
+
+def composed_inputs_hash(story: dict) -> str:
+    """Fingerprint of the text baked into a pre-composited 'A' hero.
+
+    Computed at compose time (run_newsletter._compose_lead_hero, over the same
+    length-capped view the renderer sees) and again at render time; the baked
+    card is used ONLY while they match. Any HITL console edit to the lead's text
+    changes the hash → the renderer falls back to the live-text B split card, so
+    a stale baked image can never ship."""
+    import hashlib
+    kr = story.get("korean_takeaway")
+    kr_s = "|".join(str(x) for x in kr) if isinstance(kr, list) else str(kr or "")
+    parts = [
+        story.get("headline", "") or "",
+        story.get("summary", "") or "",
+        "|".join(b for b in (story.get("implications") or []) if isinstance(b, str)),
+        kr_s,
+        (story.get("kicker") or story.get("track") or ""),
+    ]
+    return hashlib.sha1("\x1f".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
+def _cn_composed_ok(story: dict) -> bool:
+    """True when Story 01 has a baked 'A' hero whose text still matches the story."""
+    return bool(_safe_url(story.get("composed_hero_url"))) and \
+        story.get("composed_hash") == composed_inputs_hash(story)
+
+
+def _cn_composed_hero_card(t: dict, story: dict) -> str:
+    """The 'A' treatment: an HTML '01 / BIG SIGNAL' header above the pre-composited
+    hero image. The numeral + chip are HTML text (not baked) so Story 01's number
+    survives even when the inbox blocks or fails to load the image — otherwise the
+    live-text B cards (02, 03) become the first visible card and numbering appears
+    to start at 02. The image bakes the headline/summary/bullets/CTA (mail clients
+    can't render text-over-photo HTML); the card links to the source; alt carries
+    the full headline for accessibility; the plaintext body carries the full text."""
+    url = escape(_safe_url(story.get("composed_hero_url")))
+    href = escape(_safe_url(story.get("source_url")))
+    alt = escape(story.get("headline", ""))
+    img = (
+        f'<img src="{url}" width="560" height="672" alt="{alt}" '
+        f'style="display:block; width:100%; max-width:100%; height:auto; border:0; '
+        f'border-radius:0 0 10px 10px;">'
+    )
+    if href:
+        img = f'<a href="{href}" style="text-decoration:none;">{img}</a>'
+    meta_row = (
+        f'<tr><td style="padding:26px 28px 18px 28px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
+        f'<td valign="middle" style="font-family:{CN_DISPLAY}; font-weight:800; font-size:30px; '
+        f'color:{t["teal"]}; line-height:1;">01</td>'
+        f'<td width="10" style="width:10px; font-size:0;">&nbsp;</td>'
+        f'<td valign="middle"><span style="display:inline-block; background:{t["teal"]}; color:#FFFFFF; '
+        f'font-family:{MONO}; font-size:10.5px; letter-spacing:0.14em; padding:4px 8px; line-height:1;">'
+        f'BIG&nbsp;SIGNAL</span></td>'
+        f'</tr></table></td></tr>'
+    )
+    return (
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+        f'bgcolor="{t["panel"]}" style="background:{t["panel"]}; border-radius:10px;">'
+        + meta_row
+        + f'<tr><td style="padding:0; font-size:0; line-height:0;">{img}</td></tr>'
+        + '</table>'
+    )
+
+
+def _build_html_cardnews(palette, top_stories, other_news, meta, editor_concerns=None, *, include_reply_footer=True) -> str:
+    p = palette
+    t = _cn_tokens(p)
+    issue_str = f"{meta['issue_number']:03d}"
+    parts: list[str] = [_html_head(p, meta, top_stories)]
+    # Light page + neutral card canvas (20px gutter), cards stacked with 20px gaps.
+    parts.append(
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
+        f'bgcolor="{t["page"]}" style="background:{t["page"]};">'
+        f'<tr><td align="center" style="padding:28px 12px 44px 12px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" '
+        f'style="width:600px; max-width:600px;">'
+        f'<tr><td bgcolor="{t["canvas"]}" style="background:{t["canvas"]}; padding:20px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">'
+    )
+    rows: list[str] = []
+    # Review-only Sr. Editor advisory (deleted before send) — reuse the shared banner.
+    if include_reply_footer and editor_concerns and editor_concerns.get("must_fix"):
+        rows.append(_html_editor_concerns(p, editor_concerns))
+        rows.append(_cn_spacer(20))
+    rows.append(_cn_row(_cn_masthead_card(t, p, meta, issue_str)))
+    for idx, story in enumerate(top_stories):
+        rows.append(_cn_spacer(20))
+        # Story 01 renders the baked full-bleed 'A' hero when one exists AND its
+        # hash still matches the story text (HITL edits fall back to B — see
+        # composed_inputs_hash). Everything else: the live-text B split card.
+        if idx == 0 and _cn_composed_ok(story):
+            rows.append(_cn_row(_cn_composed_hero_card(t, story)))
+        else:
+            rows.append(_cn_row(_cn_story_card(t, p, story, idx)))
+    if other_news:
+        rows.append(_cn_spacer(20))
+        rows.append(_cn_row(_cn_other_news_card(t, p, other_news)))
+    rows.append(_cn_spacer(20))
+    rows.append(_cn_row(_cn_footer_card(t, p, meta, issue_str, include_reply_footer)))
+    parts.append("".join(rows))
+    parts.append("</table></td></tr></table></td></tr></table></body></html>")
+    return "".join(parts)
 
 
 # --- Plaintext fallback ----------------------------------------------------
@@ -858,7 +1364,8 @@ def _build_plaintext(palette, top_stories, other_news, meta, editor_concerns=Non
             out.append("")
     if include_reply_footer:
         out.append(f"Reply to this email with feedback — {FEEDBACK_EMAIL}")
-        out.append(f"Internal use only · Not for redistribution · {meta['date_dd_mm_yy']}")
+        _legal = palette.get("footer_legal", "Internal use only · Not for redistribution")
+        out.append(f"{_legal} · {meta['date_dd_mm_yy']}" if _legal else meta['date_dd_mm_yy'])
     else:
         out.append(meta['date_dd_mm_yy'])
     return "\n".join(out)

@@ -8,21 +8,30 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 
-def freshness_floor(today_iso: str, last_run_at: str | None = None, max_window_days: int = 7) -> date:
-    """Earliest publish date a story may have: a steady trailing window back from
-    today (default 7 days).
+def freshness_floor(today_iso: str, last_run_at: str | None = None,
+                    min_window_days: int = 7, max_window_days: int = 21) -> date:
+    """Earliest publish date a story may have.
 
-    De-dup is handled separately by the sent-stories ledger (content-based — see
-    sent_ledger.py), so the window no longer collapses to the last-run date.
-    Anchoring to last_run starved low-volume verticals: when the previous issue
-    ran only 2-3 days ago the window shrank to 2-3 days and orphaned bigger
-    stories the (often thin) prior issue never actually covered. A trailing week
-    + ledger de-dup surfaces the week's genuinely-new developments without
-    repeats. The agent still gets a "new since last run" recency hint separately
-    (see _build_dynamic_context), so it prioritises fresh news within the window.
+    Weekly cadence: anchor the window to the last SENT date so each issue covers
+    everything *since the previous one*. If a week was skipped, the window widens
+    to cover the gap instead of orphaning stories that are newer than the last
+    issue but older than a fixed 7-day window. The sent-stories ledger
+    (sent_ledger.py) separately prevents repeats, so a slightly wide window that
+    overlaps the prior issue is safe.
 
-    `last_run_at` is accepted for call-site compatibility; it no longer narrows
-    the window.
+    The window is clamped to [min_window_days, max_window_days]:
+      - never narrower than min_window_days — a same-day manual re-run, or a
+        newsletter with no send history yet, still looks back a full week instead
+        of starving; the ledger handles any overlap-driven repeats.
+      - never wider than max_window_days — a long gap or a first issue won't drag
+        in stale news.
     """
     today = date.fromisoformat(today_iso)
-    return today - timedelta(days=max_window_days)
+    window = min_window_days
+    if last_run_at and last_run_at != "never":
+        try:
+            window = (today - date.fromisoformat(last_run_at[:10])).days
+        except (ValueError, TypeError):
+            window = min_window_days
+    window = min(max(window, min_window_days), max_window_days)
+    return today - timedelta(days=window)

@@ -37,7 +37,7 @@ SPEC_SCHEMA = {
                  "out_scope", "sources", "relevance_gate", "tracks", "geography", "wants_korean", "tone"],
     "properties": {
         "slug": {"type": "string", "description": "lowercase-hyphen id, e.g. 'ai-pms'"},
-        "display_name": {"type": "string", "description": "masthead wordmark, e.g. 'The AI PM Brief'"},
+        "display_name": {"type": "string", "description": "masthead wordmark — SHORT, clever, witty, punchy: a concrete word or pun tied to the audience's world, NOT a formulaic 'The <topic> Brief'. Good: 'First Key' (first-time homebuyers), 'Show & Tell' (parents of young kids), 'The Bay Signal' (startups). 1-3 words."},
         "category_main": {"type": "string", "description": "short category label, e.g. 'AI Product'. NEVER an employer name."},
         "category_sub": {"type": "string", "description": "category suffix, default 'Intel'"},
         "subtitle": {"type": "string", "description": "one-line tagline under the wordmark, e.g. 'The intelligence brief on models, agents & shipping AI products'"},
@@ -91,14 +91,20 @@ _OUTPUT_CONTRACT = """\
    (one-line dek), source_url. NO summary, NO implications, NO hero."""
 
 _FACT_DISCIPLINE = """\
-## Fact discipline — non-negotiable, audit before submitting
+## Fact discipline — non-negotiable, a WRITE-TIME rule
 
-After drafting, audit EVERY claim against your `source_excerpt`. If a claim
-isn't supported by what you've quoted, expand the excerpt or cut the claim.
-Do NOT add specific dates, figures, named entities, or quotes unless they
-appear verbatim in the source. The Sr. Editor verifies every claim against
-the excerpt.
+Before you write ANY number, date, named entity, or quote, you must ALREADY
+have it in a verbatim sentence copied from a web_fetch result. If you don't
+have that sentence, you may NOT write the figure — say it qualitatively
+instead. Never compute, annualize, subtract, or round a statistic the source
+did not print: a derived number (a salary gap, a pass rate, an average) is a
+fabrication even when each input was real. Prefer an honest qualitative claim
+("varies by program", "among the higher pass rates") over a precise number you
+cannot quote. Your `source_excerpt` must contain, verbatim, every figure in
+your summary and implications — a deterministic guard and the Sr. Editor both
+check it, and a figure not in the excerpt fails the draft."""
 
+_FRESHNESS_ANTIPAD = """\
 ## Freshness — non-negotiable
 Run context provides TODAY and EARLIEST_ACCEPTABLE_DATE. Every story's
 `published_at` MUST be on or after EARLIEST_ACCEPTABLE_DATE — check it on
@@ -112,7 +118,8 @@ _FIELDS_BASE = """\
 ## Top Story fields
 - **track**: one of the tracks above
 - **headline**: sentence case, 6-10 words. Compact dollar notation ("$11B"),
-  numerals for counts/percentages, no colons, no hype.
+  numerals for counts/percentages, no colons, no hype — but use a figure ONLY
+  if you can quote it verbatim from the source; otherwise say it in words.
 - **summary**: 1-2 SHORT sentences, each <= 18 words so each fits ~2 lines.
   Break a dense fact into two short sentences rather than one long run-on. Fact-led.
 - **published_at**: pass through web_fetch's value verbatim; null if missing.
@@ -121,8 +128,10 @@ _FIELDS_BASE = """\
 - **source_url**: direct link to original (no aggregators)
 - **source_excerpt**: 2-4 verbatim sentences from the source containing the
   facts your summary + implications rest on. Copy-paste, do not paraphrase.
-- **implications**: exactly 2 bullets, 8-14 words each. Concrete moves for
-  the audience — no periods at end.
+- **implications**: exactly 2 bullets, 8-14 words each. Concrete but GENTLE
+  moves for the audience — lead each with a soft, exploratory verb (Explore,
+  Consider, Watch, Monitor, Weigh), never a hard directive ("must", "need to",
+  "require", "should", bare commands). No periods at end.
 {korean_field}
 ## Other News item fields (scan-only — MUST each fit ONE line)
 - **track**, **headline** (6-9 words, fits one line), **subtitle** (<= 11 words,
@@ -180,6 +189,8 @@ brief for: {spec['audience']}
 Generate this issue end-to-end and submit via the submit_newsletter tool.
 Tone: {spec['tone']}
 
+{_FACT_DISCIPLINE}
+
 ## CRITICAL — who this is for
 This brief serves the audience above. Stay in their world.
 
@@ -209,7 +220,7 @@ Other News at best, often dropped.
 
 {_QUERY_FRESHNESS}
 
-{_FACT_DISCIPLINE}
+{_FRESHNESS_ANTIPAD}
 """
 
 
@@ -231,6 +242,10 @@ def generate_brief_spec(audience: str) -> dict[str, Any]:
         "For `feeds`, give best-guess canonical RSS/Atom feed URLs (full https) for the "
         "most important of those sources — these pre-fetch fresh article candidates. "
         "Set wants_korean true ONLY for Korean-native/bilingual audiences. "
+        "For `display_name`, name it like a real magazine, not a corporate memo: "
+        "SHORT (1-3 words), clever, witty, punchy — a concrete word or pun from the "
+        "audience's own world. Think 'First Key', 'Show & Tell', 'The Bay Signal'. "
+        "NEVER a formulaic 'The <topic> Brief'. "
         "Return ONLY the JSON object."
     )
     resp = client.messages.create(

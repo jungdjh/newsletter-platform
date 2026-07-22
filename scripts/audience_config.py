@@ -21,6 +21,7 @@ caller falls back to its generic behavior.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 CONFIG_ROOT = Path(__file__).resolve().parent.parent / "config" / "audiences"
@@ -47,6 +48,49 @@ def load_palettes() -> dict[str, dict]:
     return out
 
 
+# Hero assets are self-hosted on the always-on Railway review app (public, no
+# auth) so the "lead always has a visual" guarantee never depends on a
+# third-party image host. The deploy host is injected at runtime via env
+# (ASSET_BASE_URL, else REVIEW_URL — a repo Actions variable) and is
+# deliberately NOT hardcoded here: this file is on the public-mirror allowlist,
+# so a literal host would trip mirror.sh's leak scan and bake a private URL into
+# the would-be-public engine. Empty base → a relative ref (caught loudly at
+# generate time, see run_newsletter._backfill_lead_hero).
+DEFAULT_FALLBACK_HERO = "hero/default.jpg"
+
+
+def _asset_base() -> str:
+    return (os.environ.get("ASSET_BASE_URL")
+            or os.environ.get("REVIEW_URL")
+            or "").rstrip("/")
+
+
+def _resolve_asset(ref: str) -> str:
+    """A full http(s) URL passes through (an audience may point at an external
+    image); a bare path resolves against the self-hosted asset base."""
+    ref = ref.strip()
+    if ref.lower().startswith(("http://", "https://")):
+        return ref
+    return f"{_asset_base()}/assets/{ref.lstrip('/')}"
+
+
+def load_fallback_hero(newsletter: str) -> str:
+    """Fallback hero image URL for the lead / Big-Signal card. ALWAYS returns a
+    URL (never None) so every audience can lead with a visual (David's locked
+    rule, 2026-07-12).
+
+    Uses the audience's `fallback_hero_url` (branding entry in
+    config/audiences/<pack>/palettes.json) when set, else the shared self-hosted
+    default. Platform audiences (nursing) source from sites with no usable
+    og:image, so the agent leaves the lead imageless and run_newsletter fills
+    this in. A bare ref (e.g. "hero/nursing.jpg") resolves to the self-hosted
+    asset; a full http(s) URL is used as-is."""
+    entry = load_palettes().get(newsletter) or {}
+    raw = entry.get("fallback_hero_url")
+    ref = raw if isinstance(raw, str) and raw.strip() else DEFAULT_FALLBACK_HERO
+    return _resolve_asset(ref)
+
+
 def load_brief(newsletter: str) -> str | None:
     """Verbatim hand-written brief for a pack newsletter, or None."""
     for pack in _packs():
@@ -65,6 +109,18 @@ def load_sources_config() -> dict[str, dict]:
     return out
 
 
+def load_recipients(newsletter: str) -> list[dict]:
+    """Recipient list [{"name": str, "email": str}] for a newsletter, merged from
+    every pack's recipients.json and keyed by newsletter/audience slug. Returns []
+    if unconfigured. Recipients live ONLY in the private config packs
+    (config/audiences/<pack>/recipients.json) — mirror-excluded, so a public
+    checkout has no recipients.json and this returns []."""
+    out: dict[str, list] = {}
+    for pack in _packs():
+        out.update(_read_json(pack / "recipients.json"))
+    return out.get(newsletter, [])
+
+
 def _operator_config() -> dict:
     for pack in _packs():
         cfg = _read_json(pack / "operator.json")
@@ -76,6 +132,14 @@ def _operator_config() -> dict:
 def operator_email() -> str | None:
     """The operator (To:) address for real sends, or None if unconfigured."""
     return _operator_config().get("operator_email")
+
+
+def preview_email() -> str | None:
+    """Where the pre-release preview goes — David's PERSONAL inbox, not the
+    audience list. Layer 0: he reviews the frozen render on his phone and
+    releases from there, so the preview must land somewhere he actually reads
+    on a phone. Falls back to the operator address if unconfigured."""
+    return _operator_config().get("preview_email") or operator_email()
 
 
 def gh_repo() -> str | None:

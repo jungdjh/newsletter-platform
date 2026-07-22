@@ -30,6 +30,7 @@ import sys
 from html import escape
 from pathlib import Path
 
+from scripts import anomaly_rank
 from scripts.render_html import coerce_excerpt, _safe_url
 
 REPO = Path(__file__).resolve().parent.parent
@@ -95,6 +96,7 @@ def _story_entry(s: dict) -> dict:
         "track": s.get("track", ""),
         "summary": s.get("summary", ""),
         "implications": s.get("implications", []) or [],
+        "korean_takeaway": s.get("korean_takeaway") or [],
         "source_excerpt": coerce_excerpt(s.get("source_excerpt")),
         "source_url": url,
         "hero_image_url": s.get("hero_image_url") or "",
@@ -232,6 +234,29 @@ def _render_story_card(prefix: str, i: int, s: dict, ce: str) -> str:
         f'<li data-component="{prefix}-{i}.implication-{j}"{ce}>{escape(x)}</li>'
         for j, x in enumerate(s.get("implications") or [], 1)
     )
+    # Korean takeaway — a mirror of the implications for Korean-native readers. It
+    # ships in the email, so it must be reviewable + editable here (was invisible
+    # before). Only shown for audiences with wants_korean enabled.
+    kt_raw = s.get("korean_takeaway") or []
+    # korean_takeaway is usually a single (often multi-line) string; sometimes a
+    # list of lines. Normalize to a list of lines — iterating a bare string here
+    # rendered one <li> per CHARACTER (the console-only Korean garble, fixed
+    # 2026-07-07). The email renderer (_render_korean_takeaway) normalizes the same way.
+    kt = (
+        [ln.strip() for ln in kt_raw.splitlines() if ln.strip()]
+        if isinstance(kt_raw, str)
+        else [str(x) for x in kt_raw if str(x).strip()]
+    )
+    korean_block = ""
+    if kt:
+        klines = "".join(
+            f'<li data-component="{prefix}-{i}.korean-{j}"{ce}>{escape(x)}</li>'
+            for j, x in enumerate(kt, 1)
+        )
+        korean_block = (
+            '<div class="label">Korean takeaway · 한국어 (ships in the email)</div>'
+            f'<ul class="impl korean">{klines}</ul>'
+        )
     fetch_note = "" if s.get("fetched") else (
         '<div class="warn">⚠ live article not fetched — excerpt shown as stand-in</div>'
     )
@@ -256,6 +281,7 @@ def _render_story_card(prefix: str, i: int, s: dict, ce: str) -> str:
       <p class="summary" data-component="{prefix}-{i}.summary"{ce}>{escape(s.get('summary',''))}</p>
       <div class="label">Implications</div>
       <ul class="impl">{impl}</ul>
+      {korean_block}
       <div class="label">Quoted source excerpt</div>
       <blockquote data-component="{prefix}-{i}.excerpt"{ce}>{escape(s.get('source_excerpt',''))}</blockquote>
     </div>
@@ -294,16 +320,26 @@ def render_review_html(bundle: dict, editable: bool = False) -> str:
     # the instruct/feedback layer is omitted (you edit, you don't annotate).
     ce = ' contenteditable="true" spellcheck="true"' if editable else ''
 
-    # Loud banner for operational anomalies (Top-3 shortfall, dropped items,
-    # blocked URLs). Content-flow A logs these; the reviewer must actually see them.
-    anomalies = bundle.get("anomalies") or []
+    # Operational notes, split into "needs a decision" vs "provenance". Showing
+    # all of them under one ⚠ banner trained the reviewer to skim (Ledger № 007:
+    # 7 notes, 6 needing no action) — and a gate that gets skimmed stops working.
+    # Nothing is hidden: the provenance list is still rendered, just quietly.
+    decides, notes = anomaly_rank.split(bundle.get("anomalies"))
     anomalies_html = ""
-    if anomalies:
-        _items = "".join(f"<li>{escape(str(a))}</li>" for a in anomalies)
-        anomalies_html = (
+    if decides:
+        _items = "".join(f"<li>{escape(a)}</li>" for a in decides)
+        anomalies_html += (
             f'<div class="anomalies" role="alert">'
-            f'<div class="anomalies-h">&#9888; {len(anomalies)} anomaly note(s) — review before sending</div>'
+            f'<div class="anomalies-h">&#9888; {escape(anomaly_rank.banner(decides, notes))}</div>'
             f'<ul>{_items}</ul></div>'
+        )
+    if notes:
+        _n = "".join(f"<li>{escape(a)}</li>" for a in notes)
+        _summary = (anomaly_rank.banner(decides, notes) if not decides
+                    else f"{len(notes)} note{'' if len(notes) == 1 else 's'} — no action needed")
+        anomalies_html += (
+            f'<details class="provenance"><summary>{escape(_summary)}</summary>'
+            f'<ul>{_n}</ul></details>'
         )
 
     cards = [_render_story_card("story", i, s, ce) for i, s in enumerate(stories, 1)]
@@ -374,6 +410,11 @@ def render_review_html(bundle: dict, editable: bool = False) -> str:
                 padding:12px 16px; margin-bottom:20px; color:#ffcab0; font-size:13px; }}
   .anomalies-h {{ font-weight:700; margin-bottom:6px; color:#ff9d7a; }}
   .anomalies ul {{ margin:0; padding-left:18px; }}
+  /* Provenance: kept visible but deliberately quiet — these need no decision. */
+  .provenance {{ background:rgba(255,255,255,.04); border:1px solid #333; border-radius:8px;
+                 padding:10px 16px; margin-bottom:20px; color:#9aa0a6; font-size:12.5px; }}
+  .provenance summary {{ cursor:pointer; font-weight:600; color:#b9bfc6; }}
+  .provenance ul {{ margin:8px 0 0; padding-left:18px; }}
   .sectionhead {{ font-size:12px; font-weight:700; letter-spacing:.14em; text-transform:uppercase;
                   color:var(--mut); margin:8px 2px 14px; padding-top:6px; border-top:1px solid var(--line); }}
   .othercard .onepane {{ border-right:none; }}

@@ -40,6 +40,32 @@ sys.path.insert(0, str(REPO_ROOT))
 from scripts.render_html import render_newsletter, _effective_palette  # noqa: E402
 
 
+class RecipientMismatch(RuntimeError):
+    """Resolved send envelope diverges from the configured recipient list."""
+
+
+def assert_full_delivery(newsletter: str, configured: list[dict],
+                         to_list: list[str], bcc_list: list[str]) -> None:
+    """Refuse to send unless the resolved envelope (To + BCC) covers exactly the
+    configured recipient list. Guards the unattended cron path against a silent
+    collapse to a partial list (e.g. a config-lookup change quietly falling back
+    to operator-only). Raises RecipientMismatch — the send step exits non-zero
+    and the workflow's failure hook fires the alert. Never sends to fewer people
+    than configured.
+
+    (Added after the 2026-07-07 incident review: the send itself was correct —
+    To the operator, BCC the rest of the list, all 3 delivered — but nothing
+    proved the envelope matched config, so a real drop would have gone unnoticed.)
+    """
+    want = {r["email"].strip().lower() for r in configured if r.get("email")}
+    got = {e.strip().lower() for e in [*to_list, *bcc_list]}
+    if want and got != want:
+        raise RecipientMismatch(
+            f"{newsletter}: recipient mismatch — refusing to send. "
+            f"configured({len(want)})={sorted(want)} resolved({len(got)})={sorted(got)}"
+        )
+
+
 # Sr. Editor is now ADVISORY, not a hard gate. The agent runs once. Editor
 # produces a concerns list that ships attached to the draft as a top banner
 # for human review. No regeneration loops — the human is the final editor.
@@ -75,6 +101,82 @@ def _drop_stale_other_news(items, earliest_date, today_date):
                 continue
         kept.append(item)
     return kept, dropped
+
+
+def _drop_stale_bench(bench, earliest_date, today_date):
+    """Strict freshness gate for bench reserves, BEFORE the Top-3 floor runs.
+    A bench reserve exists only to become a Top Story (promoted by the floor, or
+    swapped in as a review backfill), so a stale reserve is a stale Top Story
+    waiting to happen — the floor must never pad the top tier with one. Same rule
+    as Other News: drop reserves published before earliest_date; keep any with a
+    missing/unparseable date (can't prove staleness). Returns (kept, dropped_msgs)."""
+    from dateutil import parser as _dp
+    kept: list[dict] = []
+    dropped: list[str] = []
+    for item in bench:
+        pub = item.get("published_at")
+        if pub:
+            try:
+                pub_dt = _dp.parse(pub).date()
+            except Exception:  # noqa: BLE001 — unparseable date → keep, can't prove stale
+                pub_dt = None
+            if pub_dt is not None and pub_dt < earliest_date:
+                age = (today_date - pub_dt).days
+                dropped.append(
+                    f"DROPPED stale bench reserve '{item.get('headline', '')[:60]}' — "
+                    f"published {pub_dt.isoformat()} ({age}d old, before "
+                    f"{earliest_date.isoformat()} cutoff) — not eligible for Top-tier promotion")
+                continue
+        kept.append(item)
+    return kept, dropped
+
+
+def _confirmed_fresh(story, earliest_date):
+    """True when a story's recency is CONFIRMED — either a parseable published_at
+    on/after the window cutoff, OR an explicit `freshness_confirmed` flag the agent
+    sets when the source returns no machine-readable date but search results verify
+    recency ("9 hours ago" / "July 16"). Undated AND unflagged is NOT confirmed —
+    but that is not the same as proven stale (see _ensure_fresh_lead)."""
+    if story.get("freshness_confirmed"):
+        return True
+    pub = story.get("published_at")
+    if not pub:
+        return False
+    try:
+        from dateutil import parser as _dp
+        return _dp.parse(pub).date() >= earliest_date
+    except Exception:  # noqa: BLE001 — unparseable date → not confirmed
+        return False
+
+
+def _ensure_fresh_lead(top_stories, earliest_date, today_date):
+    """The Big Signal (lead) must be a CONFIRMED-fresh story (dated in-window, or
+    freshness-confirmed via search). Demote leading candidates that aren't — but
+    distinguish HOW:
+      • undated-but-not-provably-stale → moved to the BENCH (never discard on a
+        guess; the Top-3 floor can seat it as a lower story, so the issue keeps its
+        3-story body instead of collapsing to 1 — the download #008/#011/#012 and
+        ai-pms #2 failure);
+      • dated-but-out-of-window (PROVEN stale) → dropped outright.
+    Lower Top Stories keep the softer flag-not-drop rule. Returns
+    (top_stories, dropped_messages, benched_candidates)."""
+    top = list(top_stories or [])
+    dropped: list[str] = []
+    benched: list[dict] = []
+    while top and not _confirmed_fresh(top[0], earliest_date):
+        s = top.pop(0)
+        pub = s.get("published_at")
+        if not pub:
+            benched.append(s)   # not provably stale — keep as a lower-tier reserve
+            dropped.append(
+                f"Demoted lead candidate '{s.get('headline', '')[:60]}' to the bench "
+                f"— the Big Signal needs a confirmed date; it can still seat as a "
+                f"lower story (floor refill)")
+        else:
+            dropped.append(
+                f"DROPPED lead candidate '{s.get('headline', '')[:60]}' — stale "
+                f"(published {str(pub)[:10]}, before {earliest_date.isoformat()} cutoff)")
+    return top, dropped, benched
 
 
 def _build_subject(palette: dict, payload: dict, issue_number) -> str:
@@ -143,6 +245,447 @@ def _enforce_top3_floor(top_stories, bench):
     return top, reserve, anomalies
 
 
+def _norm_url(u: str) -> str:
+    """Coarse URL identity for repeat detection: scheme/host case, trailing
+    slash and tracking query are not editorial differences."""
+    from urllib.parse import urlsplit
+    try:
+        p = urlsplit((u or "").strip())
+    except ValueError:
+        return (u or "").strip().lower()
+    host = (p.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = (p.path or "").rstrip("/").lower()
+    return f"{host}{path}" if host else path
+
+
+def _drop_repeats(newsletter: str, top_stories: list, bench: list):
+    """Hard guard against re-running a story the newsletter already sent.
+
+    `sent_ledger.covered_block` already tells the agent "don't repeat these",
+    but that is a prompt hint — a hint the model can miss, and a repeat that
+    reaches the inbox is the kind of error a reader notices immediately. This
+    enforces it deterministically after generation: repeats are dropped from
+    BOTH the top tier and the bench (so the Top-3 floor can't promote another
+    one), and each drop raises a decision-level anomaly.
+
+    Returns (top, bench, anomalies). Never raises — a missing archive just
+    means nothing has shipped yet."""
+    try:
+        from scripts.sent_ledger import recently_covered
+        covered = {_norm_url(c["url"]): c.get("headline", "") for c in recently_covered(newsletter)}
+    except Exception as e:  # noqa: BLE001
+        print(f"[{newsletter}] repeat guard skipped ({e})", file=sys.stderr)
+        return top_stories, bench, []
+    if not covered:
+        return top_stories, bench, []
+
+    anomalies: list = []
+
+    def _keep(items: list, where: str) -> list:
+        out = []
+        for s in items:
+            key = _norm_url(s.get("source_url") or "")
+            if key and key in covered:
+                anomalies.append({
+                    "severity": "decide",
+                    "message": (f"repeat dropped from {where}: "
+                                f"\"{(s.get('headline') or '').strip()[:80]}\" — this URL already "
+                                f"shipped in a recent issue. Review before sending."),
+                })
+                continue
+            out.append(s)
+        return out
+
+    return _keep(top_stories, "the top tier"), _keep(bench, "the bench"), anomalies
+
+
+def _backfill_lead_hero(newsletter: str, payload: dict) -> None:
+    """Guarantee the lead (Big Signal / Story 01) carries a hero image.
+
+    The agent scrapes og:images from each story's source; platform audiences
+    (nursing, health) source from sites that expose no usable og:image, so the
+    lead can render imageless. David's locked rule: every issue must lead with a
+    visual. When Story 01 has no valid hero after generation, fall back to the
+    audience's configured `fallback_hero_url` (config/audiences/<pack>/palettes.json).
+
+    Big-Signal-only (Stories 02+ stay text-only per the locked hero rule),
+    idempotent (never overwrites a real og:image the agent found), and fail-open
+    (any error is swallowed — a missing hero must never break a generate run)."""
+    try:
+        top = payload.get("top_stories") or []
+        if not top or not isinstance(top[0], dict):
+            return
+        lead = top[0]
+        cur = lead.get("hero_image_url")
+        if isinstance(cur, str) and cur.strip().lower().startswith(("http://", "https://")):
+            return  # agent already found a real hero — leave it
+        from scripts import audience_config
+        fallback = audience_config.load_fallback_hero(newsletter)
+        if fallback:
+            lead["hero_image_url"] = fallback
+            if fallback.lower().startswith(("http://", "https://")):
+                print(f"[{newsletter}] lead hero backfilled from audience fallback", file=sys.stderr)
+            else:
+                # Relative ref = no ASSET_BASE_URL/REVIEW_URL at generate time; render's
+                # _safe_url will drop it and the lead would render imageless. Fail loud.
+                print(f"[{newsletter}] WARNING: fallback hero URL is not absolute ({fallback!r}); "
+                      f"set ASSET_BASE_URL/REVIEW_URL so the lead renders a visual.", file=sys.stderr)
+    except Exception:
+        return  # fail-open: never block a generate run on a missing hero
+
+
+def _is_card_news(newsletter: str) -> bool:
+    """True when the audience opted into the Card News layout (branding entry
+    `card_news: true` in config/audiences/<pack>/palettes.json)."""
+    try:
+        from scripts import audience_config
+        return bool((audience_config.load_palettes().get(newsletter) or {}).get("card_news"))
+    except Exception:
+        return False
+
+
+def _load_hero_manifest(newsletter: str) -> list:
+    """Curated hero library for an audience: assets/hero/<newsletter>/manifest.json.
+    Shape: {"images": [{file, topics[], grade, license, source_url, added, width, height, reason}]}.
+    Returns [] when absent (fail-open — the lead still gets the generic fallback)."""
+    try:
+        mp = REPO_ROOT / "assets" / "hero" / newsletter / "manifest.json"
+        if not mp.exists():
+            return []
+        data = json.loads(mp.read_text())
+        return data.get("images", data) if isinstance(data, (dict, list)) else []
+    except Exception:
+        return []
+
+
+def _newsletter_geo(newsletter: str) -> str:
+    """The audience's geography string (e.g. 'San Francisco Bay Area, California')
+    from its brief spec, or '' when unknown. Feeds the hero fit-check's place
+    guard so a geographically specific newsletter never carries a foreign photo."""
+    try:
+        p = REPO_ROOT / "briefs" / f"{newsletter}.json"
+        if p.exists():
+            return str((json.loads(p.read_text()) or {}).get("geography", "") or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _select_hero(manifest: list, track: str, *, want_hero_grade: bool, used: set, seed: int):
+    """Pick a library image for a story slot. Deterministic rotation by `seed`
+    (issue_number-derived) so consecutive issues pick different heroes without
+    any persisted counter; `used` guarantees distinct images within one issue.
+
+    Lead (want_hero_grade): topic + hero-grade first, else any hero-grade.
+    Stories 02+: topic + (hero|card) grade only — no topic match → no image
+    (the story renders text-only), per the ticket waterfall."""
+    track_l = (track or "").lower()
+
+    def topic_match(e) -> bool:
+        for tp in (e.get("topics") or []):
+            tp_l = str(tp).lower()
+            if tp_l and (tp_l in track_l or track_l in tp_l):
+                return True
+        return False
+
+    avail = [e for e in manifest if isinstance(e, dict) and e.get("file") and e["file"] not in used]
+    if want_hero_grade:
+        tiers = [
+            [e for e in avail if e.get("grade") == "hero" and topic_match(e)],
+            [e for e in avail if e.get("grade") == "hero"],
+        ]
+    else:
+        tiers = [
+            [e for e in avail if e.get("grade") in ("hero", "card") and topic_match(e)],
+        ]
+    for tier in tiers:
+        if tier:
+            return tier[seed % len(tier)]
+    return None
+
+
+def _cardnews_audience_desc(newsletter: str) -> str:
+    """Short audience descriptor for grade_image's audience_ok judgment
+    (e.g. 'The Pre-Nursing Brief — Your weekly guide to prereqs, the TEAS ...')."""
+    try:
+        from scripts import audience_config
+        pal = audience_config.load_palettes().get(newsletter) or {}
+        desc = f'{pal.get("name", newsletter)} — {pal.get("subtitle", "")}'.strip(" —")
+        return desc or newsletter
+    except Exception:
+        return newsletter
+
+
+def _try_publisher_image(newsletter: str, story: dict, is_lead: bool) -> dict:
+    """Tier 1 of the waterfall: the article's OWN og:image, vetted + graded.
+
+    Returns a dict with a "status" the caller acts on:
+      - {"status": "use", url, grade, reason, w, h} — a hero/card-grade image to apply.
+      - {"status": "reject", reason}  — the candidate was graded and REJECTED
+            (irrelevant / off-audience / too small); the caller drops any agent hero
+            and falls back to the curated library.
+      - {"status": "skip", reason}    — could NOT grade (no API key, no candidate URL,
+            fetch/vision error). The caller must PRESERVE a valid agent-found hero
+            rather than discard an unvetted-but-real image (old contract).
+
+    Grades the agent's already-found hero when present, else re-fetches the source
+    URL for its og:image (the bounded-GET fix now surfaces CDN images the agent's
+    check used to silently skip). Fail-open: any error is a skip, never a crash."""
+    try:
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            return {"status": "skip", "reason": "no API key for grading"}
+        from scripts.tools import og_image, web_fetch
+
+        cur = story.get("hero_image_url")
+        cand_url = None
+        cand_size = None
+        if isinstance(cur, str) and cur.strip().lower().startswith(("http://", "https://")):
+            cand_url = cur.strip()  # agent already found one — grade it (no re-fetch)
+        else:
+            src = story.get("source_url")
+            if not (isinstance(src, str) and src.strip().lower().startswith(("http://", "https://"))):
+                return {"status": "skip", "reason": "no source url"}
+            r = web_fetch.fetch(src)
+            cand_url = r.get("og_image_url")
+            cand_size = r.get("og_image_size_bytes")
+        if not cand_url:
+            return {"status": "skip", "reason": "no publisher og:image"}
+
+        v = og_image.grade_image(
+            cand_url, story.get("headline", ""),
+            track=story.get("track", ""),
+            audience=_cardnews_audience_desc(newsletter),
+            image_size_bytes=cand_size)
+        if v.get("grade") in ("hero", "card"):
+            return {"status": "use", "url": cand_url, "grade": v["grade"],
+                    "reason": v.get("reason", ""), "w": v.get("width"), "h": v.get("height")}
+        return {"status": "reject", "reason": v.get("reason", "rejected")}
+    except Exception:
+        return {"status": "skip", "reason": "image vetting error"}
+
+
+def _apply_image(story: dict, url: str, source: str, grade, reason: str,
+                 w=None, h=None, file=None) -> None:
+    """Set a story's hero + provenance. Records pixel dims when known so the
+    renderer can pin width/height (no reflow)."""
+    story["hero_image_url"] = url
+    if w and h:
+        story["hero_image_w"] = w
+        story["hero_image_h"] = h
+    prov = {"source": source, "grade": grade, "reason": reason}
+    if file:
+        prov["file"] = file
+    story["hero_provenance"] = prov
+
+
+def _source_cardnews_library_images(newsletter: str, payload: dict, issue_number: int) -> None:
+    """Card-News image waterfall (per story, deterministic, fail-open):
+      Tier 1 — the article's own og:image, vetted + graded (og_image.grade_image);
+      Tier 2 — the curated CC0 library, track-matched + issue-rotated;
+      Tier 3 — none (lead → the audience default via _backfill_lead_hero; 02+ →
+               text-only). Every miss/rejection is noted in payload["anomalies"] so
+      David sees WHY in review. Provenance {source, grade, reason} recorded per story."""
+    try:
+        manifest = _load_hero_manifest(newsletter)
+        from scripts import audience_config
+        from scripts import hero_fit
+        top = payload.get("top_stories") or []
+        used: set = set()
+        anomalies = payload.setdefault("anomalies", [])
+        # Move 1 (image fit-check) — PLACE guard, up front: a geographically
+        # specific newsletter must never carry a photo from a different country.
+        # This is what put an Indonesian classroom on a California story. Drop
+        # those library images before selection (deterministic, no API call).
+        geo = _newsletter_geo(newsletter)
+        audience_desc = _cardnews_audience_desc(newsletter)
+        if manifest and geo:
+            kept = []
+            for e in manifest:
+                ok, why = hero_fit.place_ok(e.get("place"), geo)
+                if ok:
+                    kept.append(e)
+                else:
+                    anomalies.append(f"library image '{e.get('file')}' excluded: {why}")
+            manifest = kept
+        for idx, story in enumerate(top):
+            if not isinstance(story, dict):
+                continue
+            # Idempotent: a story already sourced (has provenance) is left untouched —
+            # so a --from-payload replay of a sourced payload re-renders at $0 (no
+            # re-fetch, no re-grade); only raw/un-sourced payloads get sourced.
+            if story.get("hero_provenance"):
+                continue
+            is_lead = (idx == 0)
+
+            # Tier 1 — publisher og:image (vetted + graded).
+            pub = _try_publisher_image(newsletter, story, is_lead)
+            status = pub.get("status")
+            if status == "use":
+                _apply_image(story, pub["url"], "publisher", pub["grade"],
+                             pub.get("reason", ""), pub.get("w"), pub.get("h"))
+                continue
+
+            cur = story.get("hero_image_url")
+            has_agent_hero = isinstance(cur, str) and cur.strip().lower().startswith(("http://", "https://"))
+            if status == "reject":
+                # Graded and rejected — drop it (incl. stale dims/provenance) so it
+                # can't linger, and record WHY before falling to the library.
+                for k in ("hero_image_url", "hero_image_w", "hero_image_h", "hero_provenance"):
+                    story.pop(k, None)
+                anomalies.append(
+                    f"story {idx+1:02d}: publisher og:image rejected "
+                    f"({pub.get('reason','')}) — falling back")
+            elif has_agent_hero:
+                # Couldn't grade (skip), but the agent found a REAL og:image — keep it
+                # rather than discard an unvetted-but-real image (the old contract).
+                story.setdefault("hero_provenance", {
+                    "source": "publisher", "grade": "unknown",
+                    "reason": f"agent og:image (ungraded: {pub.get('reason','')})"})
+                continue
+            # else: skip with no agent hero → fall through to the library.
+
+            # Tier 2 — curated library.
+            pick = _select_hero(manifest, story.get("track", ""),
+                                want_hero_grade=is_lead, used=used,
+                                seed=issue_number + idx) if manifest else None
+            if pick:
+                resolved = audience_config._resolve_asset(f"hero/{newsletter}/{pick['file']}")
+                # Move 1 (image fit-check) — SUBJECT/AUDIENCE: the pick already
+                # cleared the place guard; now run the same vision grader
+                # publisher images go through, against THIS story. No pass ->
+                # text-only ("a wrong photo is worse than no photo").
+                fit_ok, fit_why = hero_fit.hero_fit(
+                    story, pick, newsletter_geo=geo, audience_desc=audience_desc,
+                    resolved_url=resolved)
+                if fit_ok:
+                    used.add(pick["file"])
+                    _apply_image(
+                        story, resolved,
+                        "library", pick.get("grade"), pick.get("reason", "track match"),
+                        pick.get("width"), pick.get("height"), file=pick["file"])
+                    continue
+                anomalies.append(
+                    f"story {idx+1:02d}: library image '{pick['file']}' failed "
+                    f"fit-check ({fit_why}) — text-only")
+
+            # Tier 3 — nothing suitable.
+            if is_lead:
+                anomalies.append(
+                    f"story 01: no usable publisher og:image and no hero-grade library "
+                    f"match for track '{story.get('track','')}' — using audience default")
+            else:
+                anomalies.append(
+                    f"story {idx+1:02d}: no usable publisher og:image and no library "
+                    f"match for track '{story.get('track','')}' — rendered text-only")
+    except Exception:
+        return  # fail-open: image sourcing must never break a generate run
+
+
+def _source_story_images(newsletter: str, payload: dict, issue_number: int) -> None:
+    """Unified image sourcing at the render seam. Card-News audiences enrich all
+    top stories from the curated library first; then the universal lead-hero
+    guarantee runs for everyone (idempotent — it only fills a still-empty lead)."""
+    if _is_card_news(newsletter):
+        _source_cardnews_library_images(newsletter, payload, issue_number)
+    _backfill_lead_hero(newsletter, payload)
+
+
+def _compose_lead_hero(newsletter: str, payload: dict, issue_number: int) -> None:
+    """Card News 'A' treatment (Phase 3): bake the Story-01 overlay onto a
+    HERO-grade lead image per design-spec-v7 and stamp the payload with
+    `composed_hero_url` + `composed_hash`.
+
+    - Fires only for card-news audiences whose lead image graded "hero"
+      (card-grade leads stay on the live-text B split card).
+    - Writes assets/hero/composed/<nl>-<issue>.jpg — the nightly workflow commits
+      it, the Railway assets route serves it (no new hosts).
+    - The hash is computed over the SAME length-capped view the renderer sees;
+      the renderer uses the baked card only while the hash matches, so an HITL
+      console edit to the lead's text falls back to B (no stale baked text).
+    - Idempotent (skips if already composed for this text) and fail-open: any
+      failure just leaves the B split card in place."""
+    try:
+        if not _is_card_news(newsletter):
+            return
+        top = payload.get("top_stories") or []
+        if not top or not isinstance(top[0], dict):
+            return
+        lead = top[0]
+        prov = lead.get("hero_provenance") or {}
+        url = lead.get("hero_image_url")
+        has_url = isinstance(url, str) and url.strip().lower().startswith(("http://", "https://"))
+        has_photo = prov.get("grade") == "hero" and has_url
+        # A CARD-grade lead keeps its old behaviour: no compose, and the live-text
+        # B split card renders the photo. Branding over a usable photo would throw
+        # away a real image — the branded field is for having NO image at all.
+        if has_url and not has_photo:
+            return
+
+        from scripts.render_html import _enforce_top_stories_caps, composed_inputs_hash
+        capped = _enforce_top_stories_caps([dict(lead)])[0]
+        want_hash = composed_inputs_hash(capped)
+        if lead.get("composed_hash") == want_hash and lead.get("composed_hero_url"):
+            return  # already composed for this exact text (replay)
+
+        # Source image bytes: read the library file straight from the checkout
+        # when we have it; otherwise a bounded fetch of the (already graded) URL.
+        img_bytes = None
+        if has_photo:
+            if prov.get("source") == "library" and prov.get("file"):
+                fp = REPO_ROOT / "assets" / "hero" / newsletter / str(prov["file"])
+                if fp.exists():
+                    img_bytes = fp.read_bytes()
+            if img_bytes is None:
+                from scripts.tools.og_image import _download_image_capped
+                got = _download_image_capped(url.strip())
+                if got:
+                    img_bytes = got[0]
+        # No photo survived sourcing/fit-check → brand it rather than ship a bare
+        # text lead. David's locked rule: Story 01 always carries a visual, and a
+        # branded field can never be the *wrong* picture. See Track B in
+        # Handoff/newsletter-image-strategy.
+        branded = img_bytes is None
+
+        from urllib.parse import urlparse
+        from scripts import audience_config
+        from scripts.compose_hero import compose_branded, compose_hero
+
+        entry = audience_config.load_palettes().get(newsletter) or {}
+        chassis = entry.get("chassis") or {}
+        # Bake the Korean box only for Korean-enabled audiences (mirrors the
+        # renderer's wants_korean gate). The hash was taken BEFORE this pop, from
+        # the same fields the renderer hashes, so edit-detection is unaffected.
+        bake_view = dict(capped)
+        if not entry.get("wants_korean"):
+            bake_view.pop("korean_takeaway", None)
+        src = lead.get("source_url") or ""
+        label = lead.get("source_name") or lead.get("publisher") or ""
+        if not label and src:
+            net = urlparse(src).netloc.lower()
+            label = net[4:] if net.startswith("www.") else net
+
+        fname = f"{newsletter}-{issue_number:03d}.jpg"
+        out_path = REPO_ROOT / "assets" / "hero" / "composed" / fname
+        accent = chassis.get("accent", "#0EA5A5")
+        accent_pale = chassis.get("tint", "#D6F5F5")
+        if branded:
+            compose_branded(bake_view, accent=accent, accent_pale=accent_pale,
+                            source_label=label, out_path=out_path)
+        else:
+            compose_hero(img_bytes, bake_view, accent=accent, accent_pale=accent_pale,
+                         source_label=label, out_path=out_path)
+        lead["composed_hero_url"] = audience_config._resolve_asset(f"hero/composed/{fname}")
+        lead["composed_hash"] = want_hash
+        lead.setdefault("hero_provenance", {})["composed"] = "branded" if branded else "photo"
+        print(f"[{newsletter}] composed '{'branded' if branded else 'A'}' hero "
+              f"→ assets/hero/composed/{fname}", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001
+        print(f"[{newsletter}] hero compose failed (falling back to B card): {e}", file=sys.stderr)
+        return  # fail-open: the B split card is always a valid outcome
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--newsletter", required=True,
@@ -153,6 +696,7 @@ def main() -> int:
     parser.add_argument("--to", action="append", default=None, help="Override recipient list (can repeat). When set, no Notion query is done.")
     parser.add_argument("--save-html", help="Optional path to write the rendered HTML to.")
     parser.add_argument("--skip-editor", action="store_true", help="Skip Sr. Editor review (dev mode only).")
+    parser.add_argument("--skip-live-verify", action="store_true", help="Skip live source re-fetch excerpt verification (network op; kill switch).")
     parser.add_argument("--demo", action="store_true", help="Public/GitHub render: omit the 'reply to this email' footer (only shown when actually sending).")
     parser.add_argument("--save-payload", help="Write the structured story payload (with meta) to this JSON path — enables $0 re-rendering later via --from-payload.")
     parser.add_argument(
@@ -162,7 +706,10 @@ def main() -> int:
             "JSON file. Use a test fixture (tests/fixtures/*_input.json) or any "
             "previously-saved agent output. Combine with --skip-editor + --dry-run "
             "+ --save-html for a fully-local zero-API iteration loop on render + "
-            "send-path changes."
+            "send-path changes. (Card News: an already-sourced payload re-renders "
+            "at $0 — image sourcing is idempotent; a raw, un-sourced payload with "
+            "ANTHROPIC_API_KEY set will re-vet publisher images, so unset the key to "
+            "keep replays offline.)"
         ),
     )
     args = parser.parse_args()
@@ -249,8 +796,10 @@ def main() -> int:
     # freshness floor (e.g. 18 days stale) is the failure mode this catches.
     from datetime import date as _date
     from scripts.freshness import freshness_floor  # stdlib-only — replay-safe
+    from scripts.compact_prompts import get_freshness_window
     _y, _m, _d = (int(x) for x in today_date_iso.split("-"))
-    _earliest = freshness_floor(today_date_iso, state.get("last_run_at"))
+    _win_min, _win_max = get_freshness_window(newsletter)
+    _earliest = freshness_floor(today_date_iso, state.get("last_run_at"), _win_min, _win_max)
     stale_findings: list[str] = []
     for i, s in enumerate(top):
         pub = s.get("published_at")
@@ -276,8 +825,8 @@ def main() -> int:
     if dropped_other:
         payload["other_news"] = kept_other
         payload.setdefault("anomalies", []).extend(dropped_other)
-        for _m in dropped_other:
-            print(f"[{newsletter}] {_m}", file=sys.stderr)
+        for _msg in dropped_other:
+            print(f"[{newsletter}] {_msg}", file=sys.stderr)
 
     # Drop any bench reserve that reuses a Top story's source (cheap dup guard)
     # BEFORE the floor could promote it. Semantic near-dups are the prompt's job.
@@ -288,6 +837,57 @@ def main() -> int:
         payload.setdefault("anomalies", []).extend(dedup_notes)
         for _n in dedup_notes:
             print(f"[{newsletter}] {_n}", file=sys.stderr)
+
+    # Freshness gate on the bench too — a stale reserve must never be promoted
+    # into the Top tier by the floor (nor swapped in as a review backfill). Same
+    # cutoff as Top Stories / Other News; runs BEFORE the floor so the floor can
+    # only pad with FRESH reserves (a thin-but-fresh issue beats a padded stale one).
+    bench_fresh, stale_bench_notes = _drop_stale_bench(
+        payload.get("bench") or [], _earliest, _date(_y, _m, _d))
+    payload["bench"] = bench_fresh
+    if stale_bench_notes:
+        payload.setdefault("anomalies", []).extend(stale_bench_notes)
+        for _n in stale_bench_notes:
+            print(f"[{newsletter}] {_n}", file=sys.stderr)
+
+    # Lead must be confirmed fresh. The Big Signal is the highest-stakes slot, so
+    # an undated or out-of-window lead (a stale story sneaking in via a source with
+    # no date) is dropped from the top tier — the floor below then refills from
+    # FRESH reserves. Lower Top Stories keep the softer flag-not-drop rule.
+    top_fresh_lead, lead_notes, lead_benched = _ensure_fresh_lead(
+        payload.get("top_stories") or [], _earliest, _date(_y, _m, _d))
+    payload["top_stories"] = top_fresh_lead
+    if lead_benched:
+        # Demoted-but-not-stale lead candidates rejoin the bench so the floor can
+        # seat them as lower stories — appended AFTER existing reserves, so a
+        # confirmed-fresh reserve (if any) still leads when the floor refills an
+        # empty tier. This is the fix for the "collapses to 1 story" bug.
+        payload["bench"] = (payload.get("bench") or []) + lead_benched
+    if lead_notes:
+        payload.setdefault("anomalies", []).extend(lead_notes)
+        for _n in lead_notes:
+            print(f"[{newsletter}] {_n}", file=sys.stderr)
+
+    # Repeat guard — GENERATE ONLY. Never in replay/send mode.
+    #
+    # This shipped broken on 2026-07-21 and emptied an already-approved issue in
+    # front of real recipients. nightly_send MOVES the approved payload into review/sent/
+    # *before* invoking this script with --from-payload, and recently_covered()
+    # globs review/sent/<nl>-*.json — so the guard read the very issue being sent
+    # and saw all three of its own stories as "already covered". It dropped all
+    # three; the Top-3 floor then reported "only 0 top stories" with nothing left
+    # to promote, and the send went out empty.
+    #
+    # Generate-time is also where this belongs on the merits: a drop must happen
+    # BEFORE David reviews, never silently after he has approved an issue.
+    if not args.from_payload:
+        _top_dd, _bench_dd, repeat_notes = _drop_repeats(
+            newsletter, payload.get("top_stories") or [], payload.get("bench") or [])
+        payload["top_stories"], payload["bench"] = _top_dd, _bench_dd
+        if repeat_notes:
+            payload.setdefault("anomalies", []).extend(repeat_notes)
+            for _n in repeat_notes:
+                print(f"[{newsletter}] {_n['message']}", file=sys.stderr)
 
     # Top-3 floor: promote bench reserves into the top tier when short; a
     # shortfall the bench can't fill logs a loud anomaly (never pad with a thin
@@ -301,6 +901,75 @@ def main() -> int:
         payload.setdefault("anomalies", []).extend(floor_notes)
         for _n in floor_notes:
             print(f"[{newsletter}] {_n}", file=sys.stderr)
+
+    # HARD STOP: an issue with no top stories is not an issue. № 007 went to the
+    # Wallet team on 2026-07-21 as a masthead, three Other-News briefs and a
+    # footer, because the (then-buggy) repeat guard emptied the top tier and
+    # nothing downstream refused to send. The Top-3 floor logged "only 0 top
+    # stories" and the run continued regardless — a loud log is not a gate.
+    # This is the gate: never render or send an empty issue, whatever emptied it.
+    if not (payload.get("top_stories") or []):
+        print(f"[{newsletter}] ABORT: 0 top stories — refusing to render or send an "
+              f"empty issue. Nothing was sent; re-approve after fixing the payload.",
+              file=sys.stderr)
+        return 5
+
+    # If, after the floor, the lead still can't be date-confirmed (no fresh story
+    # anywhere), surface it loudly — better a flagged issue than a silent stale lead.
+    _lead_now = payload.get("top_stories") or []
+    if _lead_now and not _confirmed_fresh(_lead_now[0], _earliest):
+        _msg = ("Lead is not date-confirmed — no story with a confirmed publish "
+                "date was available for the Big Signal. Review before sending.")
+        payload.setdefault("anomalies", []).append(_msg)
+        print(f"[{newsletter}] {_msg}", file=sys.stderr)
+
+    # Image sourcing. Card-News audiences enrich every top story from the curated
+    # CC0 library (track-matched, hero-grade preferred for the lead, rotated by
+    # issue); the universal lead-hero guarantee then fills any still-empty Big
+    # Signal from the audience default. Idempotent + fail-open (a missing image
+    # must never break a generate run). David's rule: always lead with a visual.
+    _source_story_images(newsletter, payload, issue_number)
+
+    # Card News 'A' hero (Phase 3): bake the Story-01 overlay onto a hero-grade
+    # lead image. Idempotent + fail-open; the renderer falls back to the live-text
+    # B card whenever the baked text no longer matches the story (HITL edits).
+    _compose_lead_hero(newsletter, payload, issue_number)
+
+    # Deterministic numeric guard: every currency / percent / ratio in a story's
+    # copy must appear in that story's own saved source excerpt. A figure that
+    # isn't there is a likely fabrication — the "$21,640/yr gap" / "32 of 200"
+    # failure the LLM editor let through. Findings are appended to anomalies and
+    # force the editor verdict to FAIL (below) so the human reviewer can't miss it.
+    from scripts.numeric_guard import check_payload as _numeric_check
+    numeric_findings = _numeric_check(payload.get("top_stories") or [])
+    if numeric_findings:
+        payload.setdefault("anomalies", []).extend(numeric_findings)
+        for _n in numeric_findings:
+            print(f"[{newsletter}] FABRICATION? {_n}", file=sys.stderr)
+
+    # Live source verification: re-fetch each top story's source and confirm the
+    # saved excerpt is actually IN it — catches an agent that fabricated BOTH a
+    # claim and a matching excerpt (which the excerpt-based guard + editor trust).
+    # Network op: graceful (a fetch failure is advisory, never a FAIL) and
+    # skippable via --skip-live-verify. Only a clearly-absent excerpt hard-fails.
+    live_findings: list[str] = []
+    live_fail = False
+    if not args.skip_live_verify:
+        from scripts.live_verify import verify_payload as _live_verify
+        from scripts.live_verify import verify_other_news as _live_other
+        try:
+            top_find, top_fail = _live_verify(payload.get("top_stories") or [])
+            # Other News has no saved excerpt — verify its numbers against the live
+            # source so a fabricated stat can't hide there (the guard's blind spot).
+            other_find, other_fail = _live_other(payload.get("other_news") or [])
+            live_findings = top_find + other_find
+            live_fail = top_fail or other_fail
+        except Exception as _e:  # noqa: BLE001 — verification must never abort a run
+            print(f"[{newsletter}] live-verify skipped ({type(_e).__name__}: {_e})", file=sys.stderr)
+        if live_findings:
+            payload.setdefault("anomalies", []).extend(live_findings)
+            for _n in live_findings:
+                print(f"[{newsletter}] LIVE-CHECK {_n}", file=sys.stderr)
 
     # 2. Sr. Editor — ADVISORY only. Produces concerns list, never blocks.
     editor_concerns: dict[str, Any] | None = None
@@ -318,6 +987,18 @@ def main() -> int:
         for c in editor_concerns.get("must_fix", []):
             print(f"  • {c}")
 
+    # The deterministic guards override the LLM verdict: an unsupported figure OR
+    # an excerpt absent from its live source FAILS the draft even if the editor
+    # (or --skip-editor) let it pass. Hard backstop behind the advisory editor.
+    hard_findings = list(numeric_findings)
+    if live_fail:
+        hard_findings += [f for f in live_findings if "FABRICATED" in f]
+    if hard_findings:
+        editor_concerns = editor_concerns or {"verdict": "PASS", "must_fix": [], "notes": ""}
+        editor_concerns["verdict"] = "FAIL"
+        editor_concerns["must_fix"] = list(editor_concerns.get("must_fix", [])) + hard_findings
+        print(f"[{newsletter}] Guards FAILED the draft: {len(hard_findings)} hard finding(s)", file=sys.stderr)
+
     # 3. Render — editor concerns attached as a top banner if any
     print(f"[{newsletter}] Rendering HTML...")
     if args.save_payload:
@@ -333,6 +1014,11 @@ def main() -> int:
         Path(args.save_html).write_text(html)
         print(f"[{newsletter}] HTML written to {args.save_html}")
 
+    # Per-run token + cost (generation + editor), before any send/dry-run branch
+    # so every run reports it.
+    from scripts import usage_meter
+    print(f"[{newsletter}] Usage: {usage_meter.format_line()}")
+
     if args.dry_run:
         print(f"[{newsletter}] Dry run complete. Not sending.")
         print("\n--- PLAINTEXT ---")
@@ -343,24 +1029,43 @@ def main() -> int:
     if args.to:
         to_list = args.to
         bcc_list: list[str] = []
+        reply_to = None
         print(f"[{newsletter}] Recipient override: {to_list}")
     else:
-        print(f"[{newsletter}] Fetching active recipients from Notion...")
-        from scripts.tools import notion_client  # lazy import
-        recipients = notion_client.get_active_recipients(newsletter)
-        all_emails = [r["email"] for r in recipients]
-        # By convention: send TO operator, BCC everyone else. The operator
-        # comes from OPERATOR_EMAIL (env) or the audience config pack; with
-        # neither configured, everyone goes in To:.
+        # Recipients come from the per-audience config pack (config/audiences/
+        # <pack>/recipients.json), mirror-excluded. The Notion recipients DS is
+        # DEPRECATED — kept only as a transition fallback when config is empty.
         from scripts import audience_config
-        operator_email = os.environ.get("OPERATOR_EMAIL") or audience_config.operator_email()
+        recipients = audience_config.load_recipients(newsletter)
+        rec_source = "config"
+        config_recipients = list(recipients)  # source-of-truth snapshot for the delivery guard
+        if not recipients:
+            print(f"[{newsletter}] No config recipients — falling back to Notion DS (DEPRECATED)...")
+            from scripts.tools import notion_client  # lazy import
+            recipients = notion_client.get_active_recipients(newsletter)
+            rec_source = "notion"
+        all_emails = [r["email"] for r in recipients if r.get("email")]
+        # Send TO the operator (first list entry = David for every audience, so the
+        # right inbox per audience), BCC everyone else so addresses stay private.
+        # OPERATOR_EMAIL env overrides.
+        operator_email = (
+            os.environ.get("OPERATOR_EMAIL")
+            or (all_emails[0] if all_emails else None)
+            or audience_config.operator_email()
+        )
         if operator_email:
             to_list = [operator_email]
             bcc_list = [e for e in all_emails if e.lower() != operator_email.lower()]
         else:
             to_list = all_emails
             bcc_list = []
-        print(f"[{newsletter}] To: {to_list}; BCC: {len(bcc_list)} recipients")
+        reply_to = operator_email
+        print(f"[{newsletter}] Recipients ({rec_source}): To {to_list}; BCC {len(bcc_list)}")
+        # Fail loudly: on the unattended cron path (no operator override), the
+        # resolved envelope must cover exactly the configured list. A silent drop
+        # to a partial list aborts the send + fires the failure alert.
+        if config_recipients and not os.environ.get("OPERATOR_EMAIL"):
+            assert_full_delivery(newsletter, config_recipients, to_list, bcc_list)
 
     # 5. Send
     palette = _effective_palette(newsletter)
@@ -375,6 +1080,7 @@ def main() -> int:
             html_body=html,
             plaintext_body=plaintext,
             bcc=bcc_list or None,
+            reply_to=reply_to,
             create_draft_only=args.create_draft_only,
         )
     except Exception as e:  # noqa: BLE001

@@ -45,7 +45,7 @@ from urllib.parse import urlparse
 import anthropic
 
 from .tools import web_fetch, og_image, notion_client, feeds as feed_ingest
-from .compact_prompts import make_compact_prompt, get_sources, get_feeds
+from .compact_prompts import make_compact_prompt, get_sources, get_feeds, get_freshness_window
 
 # Source-quality blocklist for the server-side web_search tool. Press-release
 # wires (prnewswire, businesswire, etc.) and low-signal aggregators (msn.com,
@@ -242,8 +242,19 @@ _STATIC_TOOL_SCHEMAS = [
                                 "description": (
                                     "Pass through the `published_at` value web_fetch returned for the source article, "
                                     "verbatim. DO NOT reformat — the renderer parses it and converts to CT for display. "
-                                    "If web_fetch didn't return a published_at, set null. Never invent or guess a "
-                                    "publish time."
+                                    "If web_fetch didn't return a published_at, set null (and see freshness_confirmed). "
+                                    "Never invent or guess a publish time."
+                                ),
+                            },
+                            "freshness_confirmed": {
+                                "type": ["boolean", "null"],
+                                "description": (
+                                    "Set true ONLY when published_at is null (the source gave no machine-readable "
+                                    "date) but your web_search results independently confirm the story is within the "
+                                    "freshness window — e.g. a search result showing 'N hours ago' or an explicit recent "
+                                    "date. This lets a genuinely-fresh story from a date-less source still qualify as the "
+                                    "Big Signal (lead) instead of being demoted to a lower slot. If you cannot confirm "
+                                    "recency, leave it false/null — never guess. Ignored when published_at is present."
                                 ),
                             },
                             "dateline": {"type": "string", "description": "Where the news happened, e.g. 'Cupertino · Brussels'"},
@@ -262,14 +273,15 @@ _STATIC_TOOL_SCHEMAS = [
                             "implications": {
                                 "type": "array",
                                 "items": {"type": "string"},
-                                "description": "Exactly 2 English bullets. 8-14 words each. Concrete strategic moves for the reader/audience."
+                                "description": "Exactly 2 English bullets. 8-14 words each. Concrete but GENTLE moves for the reader/audience — frame as exploratory recommendations (lead with a soft verb: Explore, Consider, Watch, Monitor, Weigh). NEVER hard directives: no 'must', 'need to', 'require', 'should', or bare commands."
                             },
                             "korean_takeaway": {
-                                "type": ["string", "null"],
+                                "type": ["array", "null"],
+                                "items": {"type": "string"},
                                 "description": (
                                     "Include only when the audience brief calls for a Korean takeaway; otherwise null. "
-                                    "1-2 short Korean lines, 명사형 종결 (~됨, ~함, ~임), 개조식, ≤ 80 chars total. "
-                                    "Captures the essence of the story for Korean-native readers."
+                                    "A Korean mirror of the implications: exactly one short Korean line per English implication "
+                                    "bullet (so 2 lines), 명사형 종결 (~됨, ~함, ~임), 개조식, ≤ 40 chars each. For Korean-native readers."
                                 ),
                             },
                         },
@@ -296,6 +308,16 @@ _STATIC_TOOL_SCHEMAS = [
                                 ),
                             },
                             "source_url": {"type": "string", "description": "The article URL (for hyperlinking the headline)"},
+                            "number_source": {
+                                "type": ["string", "null"],
+                                "description": (
+                                    "REQUIRED IF the headline or subtitle states a statistic (a $ amount, a "
+                                    "percentage, or an N-of-M ratio): paste the ONE verbatim sentence from the "
+                                    "source that contains that exact figure. Null when the item states no statistic. "
+                                    "Do not paraphrase — if you can't quote a sentence that contains the number, "
+                                    "remove the number and keep the item qualitative."
+                                ),
+                            },
                         },
                         "required": ["track", "headline", "subtitle", "source_url"],
                     },
@@ -396,7 +418,9 @@ def run_agent(
     # (2K tokens × 15 turns × $3/M). New = ~$0.016/run (1 write @ 1.25x +
     # ~14 reads @ 0.1x). Savings ~$0.07/run = ~$1.80/mo at 6 runs/week.
     static_brief = make_compact_prompt(newsletter)
-    dynamic_context = _build_dynamic_context(state, today_date_iso, issue_number, editor_must_fix)
+    win_min, win_max = get_freshness_window(newsletter)
+    dynamic_context = _build_dynamic_context(state, today_date_iso, issue_number, editor_must_fix,
+                                             win_min, win_max)
 
     # Resolve the per-audience source allowlist (sources + tier-1 baseline). If a
     # newsletter has no curated sources, allowed_domains is None and build_tool_schemas
@@ -414,7 +438,7 @@ def run_agent(
     # feeds (client-side — reaches outlets web_search can't crawl; web_fetch reads them).
     # Injected as LEADS into the opening message; the agent must web_fetch to verify.
     # Robust: dead feeds are skipped, never abort the run.
-    _feed_earliest = freshness_floor(today_date_iso, state.get("last_run_at"))
+    _feed_earliest = freshness_floor(today_date_iso, state.get("last_run_at"), win_min, win_max)
     feed_block = ""
     feed_urls = get_feeds(newsletter)
     if feed_urls:
@@ -437,6 +461,11 @@ def run_agent(
             feed_block = _build_feed_block(candidates)
         except Exception as _e:  # noqa: BLE001 — ingestion must never block a run
             print(f"[agent_loop] feed ingestion failed (continuing web_search-only): {type(_e).__name__}: {_e}")
+
+    # The human editor's review-console edits from the last issue, wired into the
+    # prompt so corrections (dropped stories, reworded implications) actually reach
+    # the next issue instead of being stored to review/feedback/ and never read.
+    edit_feedback_block = _build_edit_feedback_block(newsletter)
 
     system_blocks = [
         {
@@ -461,6 +490,7 @@ def run_agent(
                 f"\n\nBegin by checking recent feedback (notion_get_feedback), then research news across the use-case tracks, "
                 f"then assemble the Top 3 + watchlist + also-noted, then call submit_newsletter ONCE with the complete payload."
                 + feed_block
+                + edit_feedback_block
                 + _covered_block(newsletter)
             ),
         }
@@ -480,17 +510,20 @@ def run_agent(
         nonlocal tool_schemas, allowed_domains
         for _ in range(4):
             try:
-                return client.messages.create(
+                # Low temperature for factual zero-fabrication content. Matches the
+                # Anthropic cookbook reference (patterns/agents/util.py) and reduces
+                # variance run-to-run, which makes A/B comparison of fixes possible.
+                _resp = client.messages.create(
                     model=AGENT_MODEL,
                     max_tokens=MAX_RESPONSE_TOKENS,
                     system=system_blocks,
                     tools=tool_schemas,
                     messages=messages,
-                    # Low temperature for factual zero-fabrication content. Matches the
-                    # Anthropic cookbook reference (patterns/agents/util.py) and reduces
-                    # variance run-to-run, which makes A/B comparison of fixes possible.
                     temperature=0.1,
                 )
+                from scripts import usage_meter
+                usage_meter.record(getattr(_resp, "usage", None))
+                return _resp
             except anthropic.BadRequestError as e:
                 bad = set(_parse_inaccessible_domains(getattr(e, "message", "") or str(e)))
                 if not bad or not allowed_domains:
@@ -538,12 +571,30 @@ def run_agent(
                         if k:
                             fetched_bodies[k] = result
                 if name == "submit_newsletter":
-                    final_payload = result
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tu_id,
-                        "content": "Submitted.",
-                    })
+                    # Emit-time grounding gate: reject a payload that cites an
+                    # unfetched top-story source or an ungrounded Other News stat,
+                    # so the agent fixes it and resubmits (a generation-time catch,
+                    # not a post-hoc banner). Off for the config-pack dailies until a
+                    # dry-run validates it against their real payloads.
+                    violations = (_grounding_violations(result, fetched_bodies)
+                                  if strict_grounding_enabled(newsletter) else [])
+                    if violations:
+                        print(f"[agent_loop] submit rejected — {len(violations)} grounding "
+                              f"violation(s); asking the agent to fix + resubmit")
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tu_id,
+                            "is_error": True,
+                            "content": ("submit_newsletter REJECTED — fix every item below, then "
+                                        "call submit_newsletter again:\n- " + "\n- ".join(violations)),
+                        })
+                    else:
+                        final_payload = result
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tu_id,
+                            "content": "Submitted.",
+                        })
                 else:
                     tool_results.append({
                         "type": "tool_result",
@@ -573,7 +624,74 @@ def _norm_url(u: str) -> str:
     (…/slug/?utm_campaign=…) but submits the cleaned source_url (…/slug/), so
     exact-key lookups miss without this."""
     p = urlparse(u or "")
-    return f"{p.scheme.lower()}://{p.netloc.lower()}{p.path.rstrip('/')}"
+    host = p.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]  # www vs non-www is the same article — don't let it miss
+    return f"{p.scheme.lower()}://{host}{p.path.rstrip('/')}"
+
+
+def strict_grounding_enabled(newsletter: str) -> bool:
+    """Whether the emit-time grounding gates (top-story-URL-fetched + Other-News
+    number-sourcing) fire for this newsletter. ON for every audience EXCEPT the
+    config-pack dailies — those are the live
+    product and stay on the existing post-hoc guards until a dry-run validates
+    the gates against their real payloads. Set STRICT_GROUNDING_ALL=1 to enable
+    them everywhere once that validation passes."""
+    if os.environ.get("STRICT_GROUNDING_ALL") == "1":
+        return True
+    from scripts import audience_config
+    return newsletter not in audience_config.newsletter_display_names()
+
+
+def _grounding_violations(payload: dict[str, Any],
+                          fetched_bodies: dict[str, dict[str, Any]]) -> list[str]:
+    """Offline emit-time grounding checks. Returns actionable violation strings
+    (empty = pass); a non-empty result rejects the submit so the agent retries.
+
+    Three rules, targeting the ways the model invented numbers:
+      1. Every Top Story must cite a source_url actually fetched THIS run — kills
+         the 'cite a page you never opened' path (a story with no real fetched
+         evidence behind its numbers).
+      2. Every number in a Top Story must appear verbatim in that story's
+         `source_excerpt` — the deterministic numeric guard, run at emit time so a
+         figure pulled from memory (Zelle's "$1.2 trillion" not in the fetched
+         excerpt) forces a retry instead of only tripping the post-hoc banner.
+      3. Any Other News item that states a statistic must carry a `number_source`
+         sentence that actually contains the figure — Other News has no excerpt,
+         so this is the only generation-time grounding it can have. (The live
+         verifier still re-checks the number against the real source post-hoc.)"""
+    from scripts.numeric_guard import _material_claims, unsupported_numbers, check_story
+    problems: list[str] = []
+    fetched = {_norm_url(k) for k in fetched_bodies}
+
+    for i, s in enumerate(payload.get("top_stories") or []):
+        url = s.get("source_url") or ""
+        if url and _norm_url(url) not in fetched:
+            problems.append(
+                f"Top story {i+1} cites {url}, but you never web_fetched that page this "
+                f"run — its facts have no real source. Fetch it and quote from it, or drop the story.")
+        for fig in check_story(s):
+            problems.append(
+                f"Top story {i+1}: {fig}. Every number in a top story must appear verbatim in its "
+                f"source_excerpt — quote the source sentence that states it, or make the point qualitatively.")
+
+    for i, item in enumerate(payload.get("other_news") or []):
+        claim = " ".join([item.get("headline") or "",
+                          item.get("subtitle") or item.get("summary") or ""])
+        mats = _material_claims(claim)
+        if not mats:
+            continue
+        figs = ", ".join(sorted({d for d, _ in mats}))
+        src = (item.get("number_source") or "").strip()
+        if not src:
+            problems.append(
+                f"Other News {i+1} states {figs} but has no number_source. Paste the verbatim "
+                f"source sentence that contains the figure, or remove the number.")
+        elif unsupported_numbers(claim, src):
+            problems.append(
+                f"Other News {i+1}: {', '.join(unsupported_numbers(claim, src))} is not in your "
+                f"number_source sentence. Quote the sentence that actually states it, or drop the number.")
+    return problems
 
 
 def _attach_article_bodies(
@@ -601,6 +719,8 @@ def _build_dynamic_context(
     today_date_iso: str,
     issue_number: int,
     editor_must_fix: list[str] | None,
+    win_min: int = 7,
+    win_max: int = 21,
 ) -> str:
     """Per-request system context that comes AFTER the cached static brief.
 
@@ -610,7 +730,7 @@ def _build_dynamic_context(
     the static brief (~2K tokens) stays cached across the full agent loop.
     """
     earliest_acceptable_date = freshness_floor(
-        today_date_iso, state.get("last_run_at")).strftime("%Y-%m-%d")
+        today_date_iso, state.get("last_run_at"), win_min, win_max).strftime("%Y-%m-%d")
     parts = [
         "## Today's run context",
         f"- TODAY: {today_date_iso}",
@@ -663,6 +783,61 @@ def _build_feed_block(candidates: list[dict[str, Any]]) -> str:
         prefix = f"[{score:>3}] " if isinstance(score, int) else ""
         reason = f"  — {c['rank_reason']}" if c.get("rank_reason") else ""
         lines.append(f"- {prefix}{c['title']} — {c['source_domain']} · {date_str} · {c['url']}{reason}")
+    return "\n".join(lines)
+
+
+def _build_edit_feedback_block(newsletter: str, max_issues: int = 1, max_rows: int = 8) -> str:
+    """Render the human editor's most-recent review-console edits as an
+    opening-message block (empty string if none).
+
+    Wires issue_memory.load_editorial into generation so the corrections made in the
+    review console — a dropped story, a reworded implication — actually reach the
+    next issue's prompt. Before this, those markups were written to
+    review/feedback/<nl>-<issue>.json and never read back, so they influenced
+    nothing (verified 2026-07-10, ticket newsletter-hitl-feedback-verify).
+
+    The records capture WHAT changed (dropped/edited components), not WHY, so this is
+    selection/style guidance, not explicit intent. Scoped to the most-recent issue and
+    capped so it never anchors generation on stale specifics. Never raises — a
+    feedback-file problem must not block a run."""
+    try:
+        from scripts import issue_memory
+        rows = issue_memory.load_editorial(newsletter)
+    except Exception as _e:  # noqa: BLE001 — feedback must never block a run
+        print(f"[agent_loop] edit-feedback load failed (continuing): {type(_e).__name__}: {_e}")
+        return ""
+    if not rows:
+        return ""
+    # Keep only the most-recent issue(s): a stale drop shouldn't suppress a genuinely
+    # new story weeks later, and old edits drift out of relevance.
+    numbered = [r for r in rows if isinstance(r.get("issue"), int)]
+    if numbered:
+        keep = set(sorted({r["issue"] for r in numbered}, reverse=True)[:max_issues])
+        recent = [r for r in numbered if r["issue"] in keep]
+    else:
+        recent = rows  # unnumbered file (rare) — take as-is
+    if not recent:
+        return ""
+    lines = [
+        "\n\n## Prior editorial corrections (your last review)",
+        "PRIOR EDITORIAL CORRECTIONS — match this style and avoid re-introducing dropped "
+        "story types. These are the human editor's own edits to the previous issue; they "
+        "record WHAT changed, not why, so treat them as selection/style guidance, not "
+        "hard rules:",
+        "",
+    ]
+    for r in recent[:max_rows]:
+        tag = (r.get("tag") or "note").strip()
+        comp = (r.get("component") or "").strip()
+        instr = (r.get("instruction") or "").strip()
+        # instruction already reads "edited: … → …" / "dropped: …"; strip the leading
+        # "<tag>:" so it isn't doubled with the [tag] prefix we prepend.
+        if instr.lower().startswith(tag.lower() + ":"):
+            instr = instr[len(tag) + 1:].strip()
+        lines.append(f"- [{tag}] {comp}: {instr}" if comp else f"- [{tag}] {instr}")
+    n_more = len(recent) - max_rows
+    if n_more > 0:
+        lines.append(f"- …and {n_more} more correction(s).")
     return "\n".join(lines)
 
 

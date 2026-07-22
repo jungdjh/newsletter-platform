@@ -103,10 +103,22 @@ For each claim in `summary` and each bullet in `implications`:
    verify the claims about X — agent should expand it." This is a
    process failure worth surfacing.
 
-Implications are FORWARD-LOOKING strategic moves and don't need to be
-in the excerpt — they're editorial framing for the {team_name} team. But
-the *factual premises* they rest on (e.g. "Apple is on the defensive"
-in an implication implies a factual claim) should trace to the excerpt.
+Implications are FORWARD-LOOKING strategic moves — the *recommendation* itself
+(what {team_name} should do), and any reference to {team_name} or our own
+products and audience, do NOT need excerpt support; that framing IS the
+implication's job. Never flag our own team/product name as unsupported. BUT any
+EXTERNAL fact an implication asserts about the world — a third-party number, a
+named outside entity, a place, a superlative, a causal claim — MUST trace to the
+excerpt. A fabricated figure does NOT get a pass just because it sits in an
+implication bullet (e.g. a "$21,640/yr pay gap" with no such figure in the
+excerpt → FLAG). Verify external facts; leave the strategy and our own team's
+name alone.
+
+Crucially, a forward-looking PREDICTION or watch-item about an external party
+("watch for Apple's response", "expect Fitbit to fold into Google One", "X will
+likely Y") is NOT an asserted fact — it is exactly the hedged, forward framing
+implications exist for. Do NOT flag predictions as unsupported. Only facts
+stated as CURRENT, ESTABLISHED truth must trace to the excerpt.
 
 ## What to flag — these are the things worth a human reviewer's attention
 
@@ -143,6 +155,32 @@ in an implication implies a factual claim) should trace to the excerpt.
    This is the #1 fabrication pattern — agent blends fresh search results
    with training-data memory of long-running stories.
    REMINDER: /{current_year}/ in a URL is CURRENT, not stale.
+
+5. **Semantic distortion — a REAL fact, twisted.** The number or name IS in
+   the excerpt, but the copy changes what it MEANS. These are the subtle ones,
+   and they matter most because they read as authoritative:
+   - **Mislabeled statistic** — a real figure given a false qualifier. A
+     self-reported poll number called a "national median" or "national average";
+     an all-population median presented as a subgroup figure ("new-grad",
+     "BSN-vs-ADN"). If the excerpt calls it a poll or a self-reported range and
+     the copy calls it an official/national statistic → FLAG.
+   - **Wrong or partial attribution** — a figure the excerpt ties to entity or
+     place A, presented as belonging to B, or a multi-entity range pinned onto
+     one. Excerpt: "$32–$47 in New Jersey and California" → copy: "California
+     new grads report $32–$47" → FLAG (dropped New Jersey). Excerpt ties "$22"
+     to "rural Oklahoma" → copy: "$22 elsewhere" → FLAG.
+   - **Invented specificity** — a geography, org, date, or qualifier not in the
+     excerpt. "Bay Area" or "SFSU" when the excerpt names neither → FLAG.
+   - **Unsupported superlative or ranking** — "highest", "most", "#1", "only",
+     "best", "first" the excerpt does not state. Excerpt: "higher than the $45
+     national average" → copy: "the highest in the US" → FLAG.
+   - **Universal-quantifier overreach** — "all", "every", "never", "always" the
+     excerpt doesn't support. "covers ALL A&P topics" when the excerpt lists a
+     few → FLAG.
+   A deterministic numeric guard already catches raw numbers missing from the
+   excerpt, so you do NOT need to exhaustively re-verify every digit — spend your
+   attention on these MEANING-level distortions, which only a careful reader
+   catches.
 
 ## What you should NOT flag — be fair
 
@@ -183,8 +221,10 @@ verdict is now ADVISORY (informational only, not blocking). Use:
 - PASS = "Draft looks clean enough to send without changes"
 - FAIL = "Has at least one concern worth fixing before send"
 
-must_fix should be SHORT — ideally 0-3 items per draft. If you find more
-than 3, prioritize the most important and drop the nitpicks. If you find
+must_fix should be SHORT — ideally 0-3 items per draft for STYLE/quality nits.
+If you find more than 3 nitpicks, prioritize and drop the rest. BUT never drop
+a fabrication or semantic distortion to stay under a count — every unsupported
+fact or twisted stat gets its own line, even if that pushes past 3. If you find
 zero substantive issues, return empty list and PASS.
 
 David sees this list in his draft as a top banner. Be the editor he
@@ -245,7 +285,10 @@ def review(
     # value; fall back to the shared freshness_floor (single source of truth).
     if earliest_acceptable_date is None:
         from scripts.freshness import freshness_floor
-        earliest_acceptable_date = freshness_floor(today_date_iso).isoformat()
+        from scripts.compact_prompts import get_freshness_window
+        _win_min, _win_max = get_freshness_window(newsletter)
+        earliest_acceptable_date = freshness_floor(
+            today_date_iso, None, _win_min, _win_max).isoformat()
     system_prompt = EDITOR_SYSTEM_PROMPT.format(
         newsletter_name=display_name,
         team_name=team_name,
@@ -273,6 +316,8 @@ def review(
         # variance on FAIL/PASS calls, which made retest interpretation hard.
         temperature=0.1,
     )
+    from scripts import usage_meter
+    usage_meter.record(getattr(response, "usage", None))
 
     text = "".join(block.text for block in response.content if hasattr(block, "text"))
     return parse_editor_response(text)

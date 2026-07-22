@@ -40,6 +40,16 @@ def _display(newsletter: str) -> str:
     return audience_config.newsletter_display_names().get(newsletter, newsletter)
 
 
+def _is_notion_backed(newsletter: str) -> bool:
+    """True only for newsletters that have a real Notion 'Newsletter' select
+    option (the config packs). Platform audiences
+    (nursing, ai-pms, demo packs) have no Notion presence, so querying or
+    writing Notion for them 400s with 'select option not found'. Gate all
+    Notion I/O on this so those audiences never touch Notion — the last step of
+    the NOTION_RECIPIENTS/feedback deprecation."""
+    return newsletter in audience_config.newsletter_display_names()
+
+
 def _client() -> Client:
     token = os.environ.get("NOTION_API_KEY")
     if not token:
@@ -56,6 +66,8 @@ def get_active_recipients(newsletter: str) -> list[dict[str, str]]:
     Returns:
         List of {name, email} dicts.
     """
+    if not _is_notion_backed(newsletter):
+        return []
     display = _display(newsletter)
     notion = _client()
     results: list[dict[str, str]] = []
@@ -88,6 +100,8 @@ def get_active_recipients(newsletter: str) -> list[dict[str, str]]:
 
 def get_recent_feedback(newsletter: str, since_iso: str) -> list[dict[str, Any]]:
     """Return feedback entries created since the given ISO timestamp."""
+    if not _is_notion_backed(newsletter):
+        return []
     display = _display(newsletter)
     notion = _client()
     results = []

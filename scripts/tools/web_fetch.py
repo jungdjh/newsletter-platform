@@ -27,8 +27,12 @@ class FetchError(RuntimeError):
     pass
 
 
-def fetch(url: str, *, timeout: int = 20) -> dict[str, Any]:
+def fetch(url: str, *, timeout: int = 20, body_cap: int = 3500) -> dict[str, Any]:
     """Fetch an article and return structured content.
+
+    body_cap truncates body_text (default 3500 keeps agent context under Tier 1
+    TPM). Pass body_cap=0 for the full body — e.g. live_verify, which must see the
+    whole article to confirm a cited excerpt is actually present.
 
     Returns:
         {
@@ -94,7 +98,7 @@ def fetch(url: str, *, timeout: int = 20) -> dict[str, Any]:
         "url": url,
         "final_url": final_url,
         "title": title,
-        "body_text": body_text[:3500],   # cap so agent context stays under Tier 1 TPM
+        "body_text": (body_text[:body_cap] if body_cap else body_text),
         "body_html": body_html,
         "og_image_url": og_image_url,
         "og_image_size_bytes": og_image_size,
