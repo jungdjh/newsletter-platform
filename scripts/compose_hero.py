@@ -330,9 +330,10 @@ def _render_social_card(
     """Footnote social framing (FIRST CUT — design draft) on a genmedia
     diary-doodle. The doodle owns the joke (character + colored ink labels baked
     by the image model); this only adds thin branding in the white margins:
-    a small @thefootnotery wordmark (bottom-right) + an optional caption/kicker
-    (top-left). accent/accent_pale/source_label are accepted for a uniform
-    renderer signature but unused in the first cut (Footnote brand color TBD)."""
+    a small @thefootnotery wordmark (bottom-right), an optional pack numbering
+    chip (top-left, only in a 4-card pack) + an optional caption/kicker (top-left).
+    accent/accent_pale/source_label are accepted for a uniform renderer signature
+    but unused in the first cut (Footnote brand color TBD)."""
     W, H = profile.canvas_w, profile.canvas_h
     pad = profile.pad_x
 
@@ -344,10 +345,25 @@ def _render_social_card(
     f_mark = _font("Arimo-Bold.ttf", 30)
     f_caption = _font("Arimo-Bold.ttf", 26)
 
+    # ---- pack numbering chip (top-left): "01 / 04" — the same unified numbering
+    # language as the newsletter cards, set in the doodle's white top-left margin
+    # (clear of the model-baked character + colored labels). The current beat is
+    # crisp INK, the total recessive gray. Rendered ONLY inside a pack
+    # (content["pack_number"] set, 1..pack_total); a standalone card omits it, so
+    # the locked handle-only layout is byte-for-byte unchanged. ----
+    cap_top = pad
+    pack_number = content.get("pack_number")
+    if pack_number:
+        f_chip = _font("Arimo-Bold.ttf", 34)
+        pack_total = int(content.get("pack_total") or 4)
+        endx = _draw_tracked(draw, (pad, pad), f"{int(pack_number):02d}", f_chip, INK + (255,), 1)
+        _draw_tracked(draw, (endx, pad), f" / {pack_total:02d}", f_chip, SOCIAL_MARK + (255,), 1)
+        cap_top = pad + 48
+
     # ---- optional caption/kicker (top-left, tracked caps, ≤2 lines) ----
     caption = str(content.get("caption") or content.get("kicker") or "").strip().upper()
     if caption:
-        cy, cap_lh = pad, 40
+        cy, cap_lh = cap_top, 40
         for line in _wrap(draw, caption, f_caption, W - 2 * pad, 2):
             _draw_tracked(draw, (pad, cy), line, f_caption, INK + (255,), 2)
             cy += cap_lh
@@ -428,6 +444,30 @@ def compose_branded(
         profile="newsletter-hero",
         accent=accent, accent_pale=accent_pale,
         source_label=source_label, out_path=out_path)
+
+
+# Wide branded field for the STANDARD (non-Card-News) lead slot. That template
+# renders the lead photo at width="560" over the spec's 240px cover band, so
+# generate at @2x of that slot. Nothing is baked in: the standard template draws
+# the headline in HTML, so text on the image would print it twice. This is the
+# non-Card-News half of Track B (Handoff/newsletter-image-strategy) — it gives
+# each audience a field in ITS OWN accent instead of the one shared
+# assets/hero/default.jpg that every audience would otherwise repeat.
+FIELD_W, FIELD_H = 1120, 480
+
+
+def compose_brand_field(accent: str = "#0EA5A5", *, out_path=None,
+                        w: int = FIELD_W, h: int = FIELD_H) -> bytes:
+    """A text-free branded field sized for the standard lead slot.
+
+    Unlike compose_branded (which bakes the whole Story-01 card for Card News),
+    this is the bare accent field. Deterministic for a given accent, so a
+    re-run writes byte-identical output and never churns the repo."""
+    data = brand_field_bytes(accent, w=w, h=h)
+    if out_path is not None:
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_bytes(data)
+    return data
 
 
 def compose_card(

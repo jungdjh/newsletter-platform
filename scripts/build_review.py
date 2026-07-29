@@ -31,6 +31,7 @@ from html import escape
 from pathlib import Path
 
 from scripts import anomaly_rank
+from scripts import guard_findings
 from scripts.render_html import coerce_excerpt, _safe_url
 
 REPO = Path(__file__).resolve().parent.parent
@@ -325,7 +326,28 @@ def render_review_html(bundle: dict, editable: bool = False) -> str:
     # 7 notes, 6 needing no action) — and a gate that gets skimmed stops working.
     # Nothing is hidden: the provenance list is still rendered, just quietly.
     decides, notes = anomaly_rank.split(bundle.get("anomalies"))
+    # BLOCKING findings get a checkbox each. They are a strict subset of
+    # `decides`, so render them there and drop them from the plain list — the
+    # send refuses to run while any is unticked (approved_artifact.verify), so
+    # this checkbox is the only way past a guard, and ticking it is recorded
+    # into the signed artifact.
+    _blocking = guard_findings.blocking(bundle.get("anomalies"))
+    _block_msgs = {b["message"] for b in _blocking}
+    decides = [d for d in decides if d not in _block_msgs]
+
     anomalies_html = ""
+    if _blocking:
+        _b = "".join(
+            f'<li><label><input type="checkbox" class="ackbox" data-ack-id="{escape(b["id"])}"> '
+            f'<span class="ackcode">{escape(b["code"])}</span> {escape(b["message"])}</label></li>'
+            for b in _blocking)
+        anomalies_html += (
+            f'<div class="anomalies blocking" role="alert">'
+            f'<div class="anomalies-h">&#9940; {len(_blocking)} blocking finding'
+            f'{"" if len(_blocking) == 1 else "s"} — the send will refuse until you '
+            f'acknowledge {"it" if len(_blocking) == 1 else "each one"}</div>'
+            f'<ul>{_b}</ul></div>'
+        )
     if decides:
         _items = "".join(f"<li>{escape(a)}</li>" for a in decides)
         anomalies_html += (
@@ -410,6 +432,14 @@ def render_review_html(bundle: dict, editable: bool = False) -> str:
                 padding:12px 16px; margin-bottom:20px; color:#ffcab0; font-size:13px; }}
   .anomalies-h {{ font-weight:700; margin-bottom:6px; color:#ff9d7a; }}
   .anomalies ul {{ margin:0; padding-left:18px; }}
+  /* Blocking: louder than a decision, because the send genuinely refuses. */
+  .anomalies.blocking {{ background:rgba(255,60,60,.16); border:2px solid #ff4d4d; color:#ffd6d6; }}
+  .anomalies.blocking .anomalies-h {{ color:#ff6b6b; }}
+  .anomalies.blocking ul {{ list-style:none; padding-left:0; }}
+  .anomalies.blocking li {{ margin:6px 0; }}
+  .anomalies.blocking label {{ cursor:pointer; display:flex; gap:8px; align-items:flex-start; }}
+  .ackcode {{ font:11px/1.6 ui-monospace,monospace; color:#ff9d9d; text-transform:uppercase;
+              border:1px solid #ff6b6b; border-radius:4px; padding:0 5px; flex:none; }}
   /* Provenance: kept visible but deliberately quiet — these need no decision. */
   .provenance {{ background:rgba(255,255,255,.04); border:1px solid #333; border-radius:8px;
                  padding:10px 16px; margin-bottom:20px; color:#9aa0a6; font-size:12.5px; }}

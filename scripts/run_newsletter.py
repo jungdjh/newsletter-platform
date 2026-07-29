@@ -38,6 +38,7 @@ sys.path.insert(0, str(REPO_ROOT))
 # main() so that --from-payload + --skip-editor + --dry-run works locally
 # without ANTHROPIC_API_KEY or the anthropic SDK installed (zero-API replay).
 from scripts.render_html import render_newsletter, _effective_palette  # noqa: E402
+from scripts import guard_findings  # noqa: E402
 
 
 class RecipientMismatch(RuntimeError):
@@ -220,28 +221,40 @@ def _dedup_bench(top_stories, bench):
     return kept, notes
 
 
+# The declared top-tier floor. The post-№ 007 hard stop only refuses 0 stories,
+# so this constant is what the BLOCKING check at the call site compares against —
+# a guard fitted to the invariant the system documents, not to the one value an
+# incident happened to produce.
+TOP_STORY_FLOOR = 3
+
+
 def _enforce_top3_floor(top_stories, bench):
     """Guarantee 3 top stories when the bench allows. Promote highest-ranked
     bench reserves into the top tier until there are 3; if the bench can't fill
     the gap, emit a LOUD anomaly so the shortfall surfaces in review — never pad
     the top tier with a thin other_news item. Deterministic + unit-testable.
-    Returns (top_stories, remaining_bench, anomalies). See ticket §4A."""
+    Returns (top_stories, remaining_bench, anomalies). See ticket §4A.
+
+    Stays PURE and prose-only on purpose: review_server.build_approved_payload
+    reuses it for bench promotion and discards the notes. The blocking finding is
+    raised by the caller in main(), where the shortfall is policy rather than
+    content logic."""
     top = list(top_stories or [])
     reserve = list(bench or [])
     orig = len(top)
     anomalies: list[str] = []
-    while len(top) < 3 and reserve:
+    while len(top) < TOP_STORY_FLOOR and reserve:
         top.append(reserve.pop(0))
     promoted = len(top) - orig
     if promoted:
         anomalies.append(
             f"Top-3 floor: promoted {promoted} bench "
             f"stor{'y' if promoted == 1 else 'ies'} to fill the top tier (had {orig}).")
-    if len(top) < 3:
+    if len(top) < TOP_STORY_FLOOR:
         anomalies.append(
             f"Top-3 floor SHORT: only {len(top)} top "
-            f"stor{'y' if len(top) == 1 else 'ies'} — expected 3, and the bench had no "
-            f"reserves to promote. Review before sending.")
+            f"stor{'y' if len(top) == 1 else 'ies'} — expected {TOP_STORY_FLOOR}, and "
+            f"the bench had no reserves to promote. Review before sending.")
     return top, reserve, anomalies
 
 
@@ -301,6 +314,51 @@ def _drop_repeats(newsletter: str, top_stories: list, bench: list):
     return _keep(top_stories, "the top tier"), _keep(bench, "the bench"), anomalies
 
 
+def _brand_field_lead(newsletter: str, lead: dict) -> bool:
+    """Give an audience with no configured hero its OWN branded field.
+
+    Without this every such audience falls back to the single shared
+    assets/hero/default.jpg — the same generic photo on every audience that has
+    no hero of its own. A field in the audience's own accent always belongs,
+    costs nothing, and can never be the wrong picture (Track B, all-newsletters
+    scope locked by David 2026-07-22).
+
+    Skipped for Card News audiences — those bake the whole Story-01 card in
+    _compose_lead_hero, and that path stays byte-identical. Also skipped when
+    the audience configured a real `fallback_hero_url`: an explicit choice wins.
+
+    The file is named per AUDIENCE, not per issue: the field is a pure function
+    of the accent, so a re-run rewrites identical bytes and git sees no diff.
+
+    Returns True when it set the lead's hero. Fail-open — any error returns
+    False so the caller still applies the configured/shared fallback."""
+    try:
+        if _is_card_news(newsletter):
+            return False
+        from scripts import audience_config
+        entry = audience_config.load_palettes().get(newsletter) or {}
+        configured = entry.get("fallback_hero_url")
+        if isinstance(configured, str) and configured.strip():
+            return False
+        from scripts.compose_hero import FIELD_H, FIELD_W, compose_brand_field
+        accent = (entry.get("chassis") or {}).get("accent", "#0EA5A5")
+        fname = f"{newsletter}-field.jpg"
+        compose_brand_field(
+            accent, out_path=REPO_ROOT / "assets" / "hero" / "composed" / fname)
+        url = audience_config._resolve_asset(f"hero/composed/{fname}")
+        if not url.lower().startswith(("http://", "https://")):
+            return False  # no ASSET_BASE_URL yet — let the normal path warn
+        lead["hero_image_url"] = url
+        lead["hero_image_w"], lead["hero_image_h"] = FIELD_W, FIELD_H
+        lead.setdefault("hero_provenance", {}).update({
+            "source": "branded-field", "grade": "hero",
+            "reason": "no photo survived sourcing; branded field in the audience accent"})
+        print(f"[{newsletter}] lead hero backfilled with branded field", file=sys.stderr)
+        return True
+    except Exception:
+        return False
+
+
 def _backfill_lead_hero(newsletter: str, payload: dict) -> None:
     """Guarantee the lead (Big Signal / Story 01) carries a hero image.
 
@@ -322,6 +380,8 @@ def _backfill_lead_hero(newsletter: str, payload: dict) -> None:
         if isinstance(cur, str) and cur.strip().lower().startswith(("http://", "https://")):
             return  # agent already found a real hero — leave it
         from scripts import audience_config
+        if _brand_field_lead(newsletter, lead):
+            return
         fallback = audience_config.load_fallback_hero(newsletter)
         if fallback:
             lead["hero_image_url"] = fallback
@@ -813,7 +873,12 @@ def main() -> int:
         if pub_dt < _earliest:
             age_days = (_date(_y, _m, _d) - pub_dt).days
             msg = f"Story {i+1:02d} published {pub_dt.isoformat()} ({age_days}d old, beyond {_earliest.isoformat()} cutoff) — agent freshness gate failed"
-            stale_findings.append(msg)
+            # BLOCKING. Other News and the bench DROP a stale item outright;
+            # the top tier only ever flagged one and shipped it, so slots 02 and
+            # 03 were the freshness gap. Blocking rather than dropping keeps the
+            # existing "the model may have judgement we lack" intent: the
+            # reviewer can still ship it, but must say so.
+            stale_findings.append(guard_findings.block("stale_story", msg))
             print(f"[{newsletter}] STALE: {msg}", file=sys.stderr)
     if stale_findings:
         payload.setdefault("anomalies", []).extend(stale_findings)
@@ -901,6 +966,14 @@ def main() -> int:
         payload.setdefault("anomalies", []).extend(floor_notes)
         for _n in floor_notes:
             print(f"[{newsletter}] {_n}", file=sys.stderr)
+    # ...and a shortfall BLOCKS — but the blocking finding is raised at APPROVAL
+    # time, in approved_artifact.build(), not here. Two reasons. The top tier can
+    # still shrink after this point (the reviewer drops a story in the console),
+    # so a check here would miss the most common way an issue goes short. And
+    # raising it in both places would produce two findings with two different
+    # messages for one problem, i.e. two checkboxes — the "tick eight boxes for
+    # three facts" failure that teaches reflexive clearing.
+    # The floor is therefore enforced once, against the FINAL approved content.
 
     # HARD STOP: an issue with no top stories is not an issue. № 007 went to the
     # Wallet team on 2026-07-21 as a masthead, three Other-News briefs and a
@@ -943,8 +1016,14 @@ def main() -> int:
     from scripts.numeric_guard import check_payload as _numeric_check
     numeric_findings = _numeric_check(payload.get("top_stories") or [])
     if numeric_findings:
-        payload.setdefault("anomalies", []).extend(numeric_findings)
+        # BLOCKING. Until now these forced editor verdict=FAIL, whose only
+        # consumer is a banner in the rendered HTML — and approved_artifact
+        # re-renders WITHOUT editor_concerns, so the FAIL text never reached the
+        # bytes that ship. A fabricated figure was detected, announced, and
+        # mailed if the reviewer did not read the banner.
         for _n in numeric_findings:
+            payload.setdefault("anomalies", []).append(
+                guard_findings.block("fabrication", _n))
             print(f"[{newsletter}] FABRICATION? {_n}", file=sys.stderr)
 
     # Live source verification: re-fetch each top story's source and confirm the
@@ -967,8 +1046,15 @@ def main() -> int:
         except Exception as _e:  # noqa: BLE001 — verification must never abort a run
             print(f"[{newsletter}] live-verify skipped ({type(_e).__name__}: {_e})", file=sys.stderr)
         if live_findings:
-            payload.setdefault("anomalies", []).extend(live_findings)
+            # Only a clearly-ABSENT excerpt blocks. Unverified/partial stay
+            # advisory prose: a publisher that starts 403ing the crawler must not
+            # halt every send, or the guard becomes the outage.
             for _n in live_findings:
+                if "FABRICATED" in _n:
+                    payload.setdefault("anomalies", []).append(
+                        guard_findings.block("live_verify", _n))
+                else:
+                    payload.setdefault("anomalies", []).append(_n)
                 print(f"[{newsletter}] LIVE-CHECK {_n}", file=sys.stderr)
 
     # 2. Sr. Editor — ADVISORY only. Produces concerns list, never blocks.
@@ -1093,7 +1179,7 @@ def main() -> int:
     # 6. Update state — ONLY on a real send. Draft-only runs (the nightly
     # "generate for review" step) are provisional: they must NOT burn the issue
     # number. The issue advances when the approved issue actually sends (the
-    # 7 AM job runs WITHOUT --create-draft-only).
+    # release job runs WITHOUT --create-draft-only).
     if args.create_draft_only:
         print(f"[{newsletter}] Draft only — issue {issue_number} stays pending (state not advanced).")
     else:

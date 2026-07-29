@@ -28,6 +28,11 @@ LEDGER_007 = [
     "date confirmed from URL path and search result '4 days ago'.",
     "No reader feedback received since last run (notion_get_feedback returned empty array).",
     "Hero image sourced from TechCrunch PayPal article; vision-checked and approved.",
+    # The 7th note. The fixture was missing it, so the suite measured 1+5 while
+    # the ticket's acceptance criterion is written against the real 1+6.
+    "Headline for Story 1 uses full dollar notation to match verbatim source "
+    "language. Other News 3 number dropped to qualitative to avoid "
+    "compact-vs-full notation mismatch.",
 ]
 
 
@@ -70,6 +75,37 @@ def test_split_keeps_everything_and_ranks_ledger_007():
     assert len(decides) + len(notes) == len(LEDGER_007)   # nothing dropped
     assert decides == [LEDGER_007[1]]                     # only the boundary case
     assert "need" in ar.banner(decides, notes)
+
+
+def test_ac1_ledger_007_ranks_to_one_decision_and_six_notes():
+    """Ticket AC: the console showed 7 notes under one banner; only the PYMNTS
+    freshness boundary actually needs David. The other six are provenance."""
+    decides, notes = ar.split(LEDGER_007)
+    assert len(LEDGER_007) == 7
+    assert len(decides) == 1 and len(notes) == 6, (decides, notes)
+    assert decides == [LEDGER_007[1]]                      # the boundary case
+    assert ar.banner(decides, notes) == "1 item needs your call · 6 notes"
+
+
+def test_editorial_notation_is_provenance_not_a_decision():
+    assert ar.severity(LEDGER_007[6]) == ar.NOTE
+
+
+def test_a_notation_note_that_asks_for_review_still_decides():
+    """Widening _RESOLVED must not be able to silence an escalated note —
+    _ESCALATE is checked first, and this pins that ordering."""
+    assert ar.severity("Notation mismatch left unresolved. Review before sending.") == ar.DECIDE
+
+
+def test_ac2_an_unresolvable_date_still_decides():
+    assert ar.severity("Could not establish a published date for this article "
+                       "from the page, the feed, or the URL.") == ar.DECIDE
+
+
+def test_ac3_a_boundary_article_still_decides_with_include_or_drop_wording():
+    note = ("PYMNTS article sits exactly at EARLIEST_ACCEPTABLE_DATE — "
+            "include it or drop it.")
+    assert ar.severity(note) == ar.DECIDE
 
 
 def test_empty_and_none_are_safe():

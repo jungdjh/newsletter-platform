@@ -36,6 +36,10 @@ _BOUNDARY = ("cutoff", "boundary", "earliest_acceptable")
 _ESCALATE = ("review before sending", "short:", "floor short", " short —")
 
 # The system worked: it hit a snag, resolved it, and said so.
+#
+# Safe to widen: _ESCALATE is checked BEFORE this, so a note that also says
+# "review before sending" still lands in DECIDE. A phrase here only demotes a
+# note that nothing else has already escalated.
 _RESOLVED = (
     "confirmed",
     "approved",
@@ -45,6 +49,14 @@ _RESOLVED = (
     "promoted",
     "excluded:",          # the place guard doing its job
     "rendered text-only",
+    # Editorial notation the editor already harmonised, and explained. № 007's
+    # 7th note ("full dollar notation to match verbatim source language … dropped
+    # to qualitative to avoid compact-vs-full mismatch") is the system reporting
+    # a style call it made correctly — it read as a DECIDE only because nothing
+    # taught the classifier this shape, which is the fail-loud default doing its
+    # job rather than a judgement about the note.
+    "notation",
+    "verbatim source",
 )
 
 
@@ -56,9 +68,15 @@ def text(a: Any) -> str:
 
 
 def severity(a: Any) -> str:
-    """DECIDE or NOTE. Explicit dict severity wins; else heuristics; else DECIDE."""
+    """DECIDE or NOTE. Explicit dict severity wins; else heuristics; else DECIDE.
+
+    A `block` severity (see scripts/guard_findings.py) ranks as DECIDE for
+    display: a finding that halts the send must never render quieter than an
+    ordinary decision."""
     if isinstance(a, dict):
         s = str(a.get("severity") or "").strip().lower()
+        if s == "block":
+            return DECIDE
         if s in (DECIDE, NOTE):
             return s
 

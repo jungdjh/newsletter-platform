@@ -577,8 +577,13 @@ def _html_wordmark(palette) -> str:
     name = palette["name"]
     font = palette.get("wordmark_font", SANS)
     weight = palette.get("wordmark_weight", "900")
+    # line-height:1 (NOT sub-1.0): Outlook desktop's Word engine collapses a
+    # unitless line-height below 1 on a large display line to a zero-height box,
+    # so the 50px wordmark rendered as a blank gap on Windows Outlook while the
+    # grey masthead/tagline (line-height >= 1) survived. The footer wordmark uses
+    # line-height:1 and renders correctly in that same client — match it here.
     return f"""<tr><td bgcolor="{palette['card_bg']}" style="background:{palette['card_bg']}; padding:16px 28px 0 28px;">\
-<div style="font-family:{font}; font-size:50px; font-weight:{weight}; letter-spacing:-0.03em; line-height:0.96; text-transform:uppercase; color:{palette['canvas_ink']};">\
+<div style="font-family:{font}; font-size:50px; font-weight:{weight}; letter-spacing:-0.03em; line-height:1; text-transform:uppercase; color:{palette['canvas_ink']};">\
 {escape(name)}<span style="color:{palette['wordmark_period']};">.</span></div></td></tr>"""
 
 
