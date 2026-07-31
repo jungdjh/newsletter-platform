@@ -1,6 +1,21 @@
 <!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Newsletter Studio — live demo</title>
+<meta name="description" content="A multi-agent AI newsletter engine that researches, drafts, fact-checks and renders a real issue — and waits for a human before anything sends.">
+<link rel="canonical" href="https://jungdjh.github.io/newsletter-platform/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Newsletter Studio">
+<meta property="og:url" content="https://jungdjh.github.io/newsletter-platform/">
+<meta property="og:title" content="Newsletter Studio — live demo">
+<meta property="og:description" content="A multi-agent AI newsletter engine that researches, drafts, fact-checks and renders a real issue — and waits for a human before anything sends.">
+<meta property="og:image" content="https://jungdjh.github.io/newsletter-platform/social-card.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="627">
+<meta property="og:image:alt" content="Newsletter Studio — the eight-stage pipeline: brief, research, read sources, freshness, draft, senior editor, render, done.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Newsletter Studio — live demo">
+<meta name="twitter:description" content="A multi-agent AI newsletter engine that fact-checks itself before a human approves the send.">
+<meta name="twitter:image" content="https://jungdjh.github.io/newsletter-platform/social-card.png">
 <meta name="theme-color" content="#FFF1E5">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
@@ -112,14 +127,14 @@
   .fcta{display:inline-flex;align-items:center;gap:8px;margin-top:16px;background:var(--accent);color:#fff;border-radius:8px;padding:12px 22px;font-size:14px;font-weight:700;text-decoration:none}
   .fcta:hover{filter:brightness(1.06)}
 </style></head><body>
-<header><h1>Newsletter <span>Studio</span></h1><div class="sub">An AI agent researches, drafts, fact-checks, and renders a real newsletter issue &mdash; watch it run.</div></header>
+<header><h1>Newsletter <span>Studio</span></h1><div class="sub">An AI agent researches, drafts, verifies, and renders a real newsletter issue &mdash; watch it run.</div></header>
 <main>
   <div class="hero">
     <div style="width:100%">
       <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;justify-content:space-between">
         <div class="lead">
           <div class="t">See the engine run</div>
-          <div class="d">Watch the agentic pipeline work through a real issue &mdash; research &rarr; draft &rarr; fact-check &rarr; a human approval &rarr; render. Instant, no signup.</div>
+          <div class="d">Watch the agentic pipeline work through a real issue &mdash; research &rarr; draft &rarr; verify &rarr; a human approval &rarr; render. Instant, no signup.</div>
         </div>
         <button id="go">&#9654;&nbsp; See it run</button>
       </div>
@@ -138,7 +153,7 @@
   <div id="review" class="review">
     <div class="rvcard">
       <div class="rvhead"><span id="rvbadge" class="badge gate">Human review</span> The editor gate &mdash; nothing sends until a person approves</div>
-      <div class="rvsub">Every claim must be quote-anchored to its source. The editor catches what the model can't vouch for.</div>
+      <div class="rvsub">Every material figure and external fact is quote-anchored to a verbatim excerpt. Checked deterministically in code, then re-checked against the live page.</div>
       <div id="claimFlag" class="claim flag">
         <div class="lbl">⚠ Flagged &mdash; not found in source</div>
         <div class="txt">&ldquo;Enterprise AI budgets <s>jumped 47% in Q2</s>&rdquo;</div>
@@ -160,7 +175,7 @@
   <!-- F6: gallery — six audiences, one engine -->
   <div id="gallery" class="gallery">
     <div class="gh">See what else it ships</div>
-    <div class="gsub">Six audiences, one engine. The same research, fact-checking and human-approval gate &mdash; a different beat each time. Two of these ship to real readers on a cadence; the rest are generated to show the pipeline on another beat. Pick one to preview its issue below.</div>
+    <div class="gsub">Six audiences, one engine. The same research, verification and human-approval gate &mdash; a different beat each time. Two of these ship to real readers on a cadence; the rest are generated to show the pipeline on another beat. Pick one to preview its issue below.</div>
     <div class="gcards">
       <button class="gcard" style="--gc:#6D5EF5" data-f="api/gallery/ai-pms.html" data-n="The AI PM Brief" data-s="a real issue this engine produced end-to-end"><span class="gcn"><span class="gdot"></span>The AI PM Brief</span><span class="gcs">Models, agents, evals &amp; shipping AI products, for product managers.</span><span class="gco">Open issue &rarr;</span></button>
       <button class="gcard" style="--gc:#0EA5A5" data-f="api/gallery/nursing.html" data-n="The Pre-Nursing Brief" data-s="a real issue this engine produced end-to-end"><span class="gcn"><span class="gdot"></span>The Pre-Nursing Brief</span><span class="gcs">Prereqs, the TEAS, and getting into nursing school.</span><span class="gco">Open issue &rarr;</span></button>
@@ -176,13 +191,13 @@
   <div id="finale" class="finale">
     <div class="fcard">
       <div class="ft">Want to see it run on your audience?</div>
-      <div class="fd">Live generation does real research and real fact-checking, which costs real money per issue &mdash; so it's not a public button. If you're seriously curious, get in touch and I'll run one for you.</div>
+      <div class="fd">Live generation does real research and real source verification, which costs real money per issue &mdash; so it's not a public button. If you're seriously curious, get in touch and I'll run one for you.</div>
       <a class="fcta" href="mailto:jungdjh@gmail.com?subject=Newsletter%20Studio%20%E2%80%94%20run%20one%20for%20my%20audience">✉&nbsp; Get in touch</a>
     </div>
   </div>
 </main>
 <script>
-const NODES = [{"id": "brief", "label": "Brief", "detail": "Configuring for the audience"}, {"id": "research", "label": "Research", "detail": "Searching the web for fresh stories"}, {"id": "read", "label": "Read sources", "detail": "Fetching + reading the articles"}, {"id": "freshness", "label": "Freshness gate", "detail": "Dropping anything stale"}, {"id": "draft", "label": "Draft", "detail": "Writing the issue"}, {"id": "editor", "label": "Sr. Editor", "detail": "Fact-checking every claim against source"}, {"id": "render", "label": "Render", "detail": "Responsive, dark-mode, Outlook-safe email"}, {"id": "done", "label": "Done", "detail": "Ready for review"}];
+const NODES = [{"id": "brief", "label": "Brief", "detail": "Configuring for the audience"}, {"id": "research", "label": "Research", "detail": "Searching the web for fresh stories"}, {"id": "read", "label": "Read sources", "detail": "Fetching + reading the articles"}, {"id": "freshness", "label": "Freshness gate", "detail": "Stale items dropped; a stale lead blocks the send"}, {"id": "draft", "label": "Draft", "detail": "Writing the issue"}, {"id": "editor", "label": "Sr. Editor", "detail": "Checking every claim against the quoted source"}, {"id": "render", "label": "Render", "detail": "Responsive, dark-mode, Outlook-safe email"}, {"id": "done", "label": "Done", "detail": "Ready for review"}];
 const flow = document.getElementById('flow');
 function paint(states){
   flow.innerHTML='';
@@ -242,7 +257,7 @@ function revealSample(){
   const cfg=document.getElementById('cfg');
   const CASE='https://github.com/jungdjh/newsletter-platform/blob/main/README.md';
   if(SAMPLE&&SAMPLE.html){
-    cfg.innerHTML='<b>The AI PM Brief</b> &middot; a real issue this engine produced end-to-end &mdash; brief, research, fact-check, render. '
+    cfg.innerHTML='<b>The AI PM Brief</b> &middot; a real issue this engine produced end-to-end &mdash; brief, research, verify, render. '
       +'<a href="'+CASE+'" target="_blank" rel="noopener">Read the case study &rarr;</a>';
     document.getElementById('frame').srcdoc=SAMPLE.html;
   }else{
