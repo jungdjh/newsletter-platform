@@ -160,7 +160,7 @@
   <!-- F6: gallery — six audiences, one engine -->
   <div id="gallery" class="gallery">
     <div class="gh">See what else it ships</div>
-    <div class="gsub">Six audiences, one engine. The same research, fact-checking, and human review &mdash; a different beat each time. Pick one to preview its issue below.</div>
+    <div class="gsub">Six audiences, one engine. The same research, fact-checking and human-approval gate &mdash; a different beat each time. Two of these ship to real readers on a cadence; the rest are generated to show the pipeline on another beat. Pick one to preview its issue below.</div>
     <div class="gcards">
       <button class="gcard" style="--gc:#6D5EF5" data-f="api/gallery/ai-pms.html" data-n="The AI PM Brief" data-s="a real issue this engine produced end-to-end"><span class="gcn"><span class="gdot"></span>The AI PM Brief</span><span class="gcs">Models, agents, evals &amp; shipping AI products, for product managers.</span><span class="gco">Open issue &rarr;</span></button>
       <button class="gcard" style="--gc:#0EA5A5" data-f="api/gallery/nursing.html" data-n="The Pre-Nursing Brief" data-s="a real issue this engine produced end-to-end"><span class="gcn"><span class="gdot"></span>The Pre-Nursing Brief</span><span class="gcs">Prereqs, the TEAS, and getting into nursing school.</span><span class="gco">Open issue &rarr;</span></button>
@@ -242,7 +242,7 @@ function revealSample(){
   const cfg=document.getElementById('cfg');
   const CASE='https://github.com/jungdjh/newsletter-platform/blob/main/README.md';
   if(SAMPLE&&SAMPLE.html){
-    cfg.innerHTML='<b>The AI PM Brief</b> &middot; a real issue this engine produced end-to-end, human-reviewed before publishing. '
+    cfg.innerHTML='<b>The AI PM Brief</b> &middot; a real issue this engine produced end-to-end &mdash; brief, research, fact-check, render. '
       +'<a href="'+CASE+'" target="_blank" rel="noopener">Read the case study &rarr;</a>';
     document.getElementById('frame').srcdoc=SAMPLE.html;
   }else{
@@ -283,7 +283,7 @@ const GCASE='https://github.com/jungdjh/newsletter-platform/blob/main/README.md'
 document.querySelectorAll('.gcard').forEach(c=>c.onclick=()=>{
   const gframe=document.getElementById('gframe');
   gframe.removeAttribute('srcdoc'); gframe.src=c.dataset.f;
-  document.getElementById('gcfg').innerHTML='<b>'+c.dataset.n+'</b> &middot; '+c.dataset.s+', human-reviewed before publishing. '
+  document.getElementById('gcfg').innerHTML='<b>'+c.dataset.n+'</b> &middot; '+c.dataset.s+', produced end-to-end by this engine. '
     +'<a href="'+GCASE+'" target="_blank" rel="noopener">Read the case study &rarr;</a>';
   document.querySelectorAll('.gcard').forEach(x=>x.classList.toggle('on', x===c));
   const viewer=document.getElementById('gviewer');
