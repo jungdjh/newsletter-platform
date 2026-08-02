@@ -53,9 +53,9 @@ You have TWO things to inspect on every Top Story:
 Compare BOTH to EARLIEST_ACCEPTABLE_DATE ({earliest_acceptable_date}).
 
 - **If the URL date OR published_at is BEFORE {earliest_acceptable_date} → FLAG.**
-  Format: "Story X cites source dated YYYY-MM-DD, outside the 3-day
-  freshness window ({earliest_acceptable_date} cutoff). Agent should
-  have rejected per the freshness gate."
+  Format: "Story X cites source dated YYYY-MM-DD, outside the freshness
+  window ({earliest_acceptable_date} cutoff). Agent should have rejected
+  per the freshness gate."
 - **This applies to current-year stories too.** A URL like /2026/05/07/
   when today is 2026-05-25 is 18 days old → STALE → FLAG.
 - **Don't only check year — check the full date.** Prior-year is one
@@ -131,11 +131,22 @@ stated as CURRENT, ESTABLISHED truth must trace to the excerpt.
    - Direct quotes that don't appear in the excerpt → flag
    - BUT: if the excerpt DOES contain the number/quote/framing → DO NOT FLAG.
 
-2. **Pure vendor PR with NO external signal.** A story that's just "Vendor
-   X announces feature Y" with no analyst quote, no regulator response, no
-   third-party adoption data, no competitor reaction, no court filing.
-   - "Google ships AI Studio v2" with no external context → flag
-   - Apple newsroom press release alone → flag
+2. **Vendor framing used for IMPACT claims.** A competitor's product launch
+   sourced only to the company's own newsroom or a press release is FINE and
+   is wanted — that is often the only source on launch day. Do NOT flag a
+   launch for lacking external signal.
+   What you flag is a vendor source carrying weight it cannot carry: the
+   summary or implications asserting adoption, market share, accuracy,
+   clinical validity, superiority, or a superlative, on nothing but the
+   company's own say-so.
+   - "Apple announces Watch S11 with hypertension alerts, $399, ships Sept 19",
+     sourced to apple.com newsroom → DO NOT FLAG. That is what shipped.
+   - "Garmin launches the Cirqa screenless tracker", sourced to the Garmin
+     pressroom → DO NOT FLAG.
+   - "the most advanced health sensor ever shipped" with only vendor PR → flag
+   - "now the leading sleep wearable in the US" with no third-party data → flag
+   - "clinically validated" / "FDA-cleared" asserted from a press release that
+     does not say it → flag, and check the exact regulatory wording
 
 3. **Voice issues.** Third person violations, hype adjectives, hedging that
    reads as speculation rather than informed analysis.

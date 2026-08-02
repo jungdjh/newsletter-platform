@@ -47,24 +47,29 @@ import anthropic
 from .tools import web_fetch, og_image, notion_client, feeds as feed_ingest
 from .compact_prompts import make_compact_prompt, get_sources, get_feeds, get_freshness_window
 
-# Source-quality blocklist for the server-side web_search tool. Press-release
-# wires (prnewswire, businesswire, etc.) and low-signal aggregators (msn.com,
-# yahoo.com syndication, headtopics) are the main source of fabrication-tempting
-# "Vendor X announces Y" stories without external signal. Anthropic's web_search
-# accepts these as `blocked_domains` and never returns results from them.
-# Migrated from the old scripts/tools/web_search.py BLOCKED_DOMAINS set.
-# Note: path-based blocks (e.g. marketwatch.com/press-release) aren't supported
-# by Anthropic web_search — domain-only entries here.
+# Source-quality blocklist for the server-side web_search tool. Anthropic's
+# web_search accepts these as `blocked_domains` and never returns results from
+# them. Note: path-based blocks (e.g. marketwatch.com/press-release) aren't
+# supported — domain-only entries here.
+#
+# 2026-07-29: the press-release WIRES were removed from this list. They were
+# blocked on the theory that "Vendor X announces Y" without external signal is
+# fabrication-tempting. In practice the block did something worse: it made the
+# briefs structurally unable to see product launches, because on launch day the
+# wire or the company newsroom is frequently the ONLY source. What survived the
+# filter was policy, litigation and funding rounds, so two of the briefs drifted
+# into reading like trade-policy digests and the reader stopped sending them. See the launch rules in the briefs.
+#
+# The honesty control moved rather than disappeared: vendor sources are now
+# accepted for WHAT shipped (product, price, date, named features) and still
+# refused for HOW MUCH IT MATTERS (adoption, market share, accuracy, "first
+# ever"). That distinction is enforced in the briefs and by the Sr. Editor,
+# which is the right place for it — a judgement about a claim, not a domain.
+#
+# Low-signal AGGREGATORS stay blocked. That block is about syndication noise
+# and losing the original outlet, not about PR.
 WEB_SEARCH_BLOCKED_DOMAINS = [
-    # Press-release wires
-    "prnewswire.com",
-    "businesswire.com",
-    "globenewswire.com",
-    "newswire.com",
-    "prweb.com",
-    "einpresswire.com",
     "yahoo.com",        # generic syndication — re-search the original outlet
-    # Low-signal aggregators
     "msn.com",
     "headtopics.com",
     "newsbreak.com",

@@ -456,6 +456,38 @@ def compose_branded(
 FIELD_W, FIELD_H = 1120, 480
 
 
+def brand_lead_field_bytes(accent: str = "#0EA5A5", *,
+                           w: int = FIELD_W, h: int = FIELD_H) -> bytes:
+    """The STANDALONE lead field's gradient. Accent-forward, not near-black.
+
+    Deliberately NOT `brand_field_bytes`. That one deepens the accent to 55%
+    and runs it down to (10,12,14) because the Card News renderer lays a scrim
+    over it and draws white text on top — darkness there is load-bearing.
+
+    Nothing overlays this field. The standard template draws the headline in
+    HTML below the image, so the field is paying a legibility cost it does not
+    owe: rendered at the lead slot's real size, an accent as bright as ai-pms
+    `#6D5EF5` read as a dark smudge rather than as the audience's colour.
+
+    So this one stays in the accent's own range: a light-lifted accent at the
+    top down to a moderately deepened accent at the bottom. Still a gradient
+    (it reads as a designed field, not a flat swatch), still clearly distinct
+    between audiences, still text-free and deterministic."""
+    r, g, b = _hex_rgb(accent)
+    # Lift toward white for the top third of the ramp, deepen modestly for the
+    # bottom. Neither end approaches black, which is the whole change.
+    top = tuple(round(c + (255 - c) * 0.28) for c in (r, g, b))
+    bottom = tuple(max(0, round(c * 0.62)) for c in (r, g, b))
+    grad = Image.new("RGB", (1, h))
+    px = grad.load()
+    for y in range(h):
+        t = y / max(1, h - 1)
+        px[0, y] = tuple(round(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
+    buf = io.BytesIO()
+    grad.resize((w, h)).save(buf, format="JPEG", quality=92)
+    return buf.getvalue()
+
+
 def compose_brand_field(accent: str = "#0EA5A5", *, out_path=None,
                         w: int = FIELD_W, h: int = FIELD_H) -> bytes:
     """A text-free branded field sized for the standard lead slot.
@@ -463,7 +495,7 @@ def compose_brand_field(accent: str = "#0EA5A5", *, out_path=None,
     Unlike compose_branded (which bakes the whole Story-01 card for Card News),
     this is the bare accent field. Deterministic for a given accent, so a
     re-run writes byte-identical output and never churns the repo."""
-    data = brand_field_bytes(accent, w=w, h=h)
+    data = brand_lead_field_bytes(accent, w=w, h=h)
     if out_path is not None:
         Path(out_path).parent.mkdir(parents=True, exist_ok=True)
         Path(out_path).write_bytes(data)

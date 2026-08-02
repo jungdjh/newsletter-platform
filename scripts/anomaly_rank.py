@@ -1,7 +1,7 @@
 """Rank anomaly notes: what needs David's decision vs what is just provenance.
 
 The review console used to show every operational note under one ⚠ banner. On
-Ledger № 007 that was 7 notes, of which 6 needed no action — four were "the page
+the 2026-07-21 issue that was 7 notes, of which 6 needed no action — four were "the page
 had no machine-readable date, so I confirmed it from the RSS feed / URL / search
 snippet, and it passed." A gate the reviewer learns to skim is a gate that stops
 working, so notes are split into two tiers:
@@ -49,8 +49,8 @@ _RESOLVED = (
     "promoted",
     "excluded:",          # the place guard doing its job
     "rendered text-only",
-    # Editorial notation the editor already harmonised, and explained. № 007's
-    # 7th note ("full dollar notation to match verbatim source language … dropped
+    # Editorial notation the editor already harmonised, and explained. The
+    # 2026-07-21 issue's 7th note ("full dollar notation to match verbatim source language … dropped
     # to qualitative to avoid compact-vs-full mismatch") is the system reporting
     # a style call it made correctly — it read as a DECIDE only because nothing
     # taught the classifier this shape, which is the fail-loud default doing its

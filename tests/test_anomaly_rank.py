@@ -1,10 +1,10 @@
 """Anomaly ranking + the hard repeat guard.
 
-Origin: Ledger № 007 (2026-07-21) showed "⚠ 7 anomaly note(s) — review before
+Origin: the 2026-07-21 issue showed "⚠ 7 anomaly note(s) — review before
 sending" where 6 needed no action. David: "I don't really even know what all
 these mean." A gate that gets skimmed stops working.
 
-The real Ledger № 007 notes are the fixture below — if the classifier ever
+The real notes from that run are the fixture below — if the classifier ever
 regresses on them, this fails.
 """
 from pathlib import Path
@@ -14,7 +14,7 @@ import pytest
 from scripts import anomaly_rank as ar
 import scripts.run_newsletter as rn
 
-LEDGER_007 = [
+NOTES_20260721 = [
     "PaymentsDive surcharge article (825609) and M&A article (825653) did not return "
     "published_at from web_fetch; dates confirmed as 2026-07-20 from RSS feed metadata. "
     "freshness_confirmed set on surcharge story.",
@@ -41,18 +41,18 @@ LEDGER_007 = [
 def test_resolved_date_fallbacks_are_not_decisions():
     # The four "no published_at, but I confirmed it another way" notes are the
     # system working. They must not sit in the ⚠ banner.
-    for note in (LEDGER_007[0], LEDGER_007[2], LEDGER_007[3]):
+    for note in (NOTES_20260721[0], NOTES_20260721[2], NOTES_20260721[3]):
         assert ar.severity(note) == ar.NOTE, note[:60]
 
 
 def test_freshness_boundary_still_decides():
     # Confirmed AND borderline — the boundary must win over the confirmation.
-    assert ar.severity(LEDGER_007[1]) == ar.DECIDE
+    assert ar.severity(NOTES_20260721[1]) == ar.DECIDE
 
 
 def test_passing_guards_are_notes():
-    assert ar.severity(LEDGER_007[4]) == ar.NOTE   # no reader feedback
-    assert ar.severity(LEDGER_007[5]) == ar.NOTE   # vision-checked and approved
+    assert ar.severity(NOTES_20260721[4]) == ar.NOTE   # no reader feedback
+    assert ar.severity(NOTES_20260721[5]) == ar.NOTE   # vision-checked and approved
 
 
 def test_top3_shortfall_still_decides():
@@ -71,24 +71,24 @@ def test_explicit_dict_severity_wins():
 
 
 def test_split_keeps_everything_and_ranks_ledger_007():
-    decides, notes = ar.split(LEDGER_007)
-    assert len(decides) + len(notes) == len(LEDGER_007)   # nothing dropped
-    assert decides == [LEDGER_007[1]]                     # only the boundary case
+    decides, notes = ar.split(NOTES_20260721)
+    assert len(decides) + len(notes) == len(NOTES_20260721)   # nothing dropped
+    assert decides == [NOTES_20260721[1]]                     # only the boundary case
     assert "need" in ar.banner(decides, notes)
 
 
 def test_ac1_ledger_007_ranks_to_one_decision_and_six_notes():
     """Ticket AC: the console showed 7 notes under one banner; only the PYMNTS
     freshness boundary actually needs David. The other six are provenance."""
-    decides, notes = ar.split(LEDGER_007)
-    assert len(LEDGER_007) == 7
+    decides, notes = ar.split(NOTES_20260721)
+    assert len(NOTES_20260721) == 7
     assert len(decides) == 1 and len(notes) == 6, (decides, notes)
-    assert decides == [LEDGER_007[1]]                      # the boundary case
+    assert decides == [NOTES_20260721[1]]                      # the boundary case
     assert ar.banner(decides, notes) == "1 item needs your call · 6 notes"
 
 
 def test_editorial_notation_is_provenance_not_a_decision():
-    assert ar.severity(LEDGER_007[6]) == ar.NOTE
+    assert ar.severity(NOTES_20260721[6]) == ar.NOTE
 
 
 def test_a_notation_note_that_asks_for_review_still_decides():

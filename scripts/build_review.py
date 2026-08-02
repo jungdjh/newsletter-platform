@@ -322,7 +322,7 @@ def render_review_html(bundle: dict, editable: bool = False) -> str:
     ce = ' contenteditable="true" spellcheck="true"' if editable else ''
 
     # Operational notes, split into "needs a decision" vs "provenance". Showing
-    # all of them under one ⚠ banner trained the reviewer to skim (Ledger № 007:
+    # all of them under one ⚠ banner trained the reviewer to skim (2026-07-21:
     # 7 notes, 6 needing no action) — and a gate that gets skimmed stops working.
     # Nothing is hidden: the provenance list is still rendered, just quietly.
     decides, notes = anomaly_rank.split(bundle.get("anomalies"))

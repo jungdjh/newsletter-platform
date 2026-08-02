@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import traceback
 from datetime import datetime, timezone, timedelta
@@ -228,12 +229,61 @@ def _dedup_bench(top_stories, bench):
 TOP_STORY_FLOOR = 3
 
 
+# A bench reserve the WRITER could not verify must never be promoted. On
+# 2026-07-29 the agent fetched a funding story, got HTTP 403,
+# demoted it to the bench and wrote the caveat into its own source_excerpt —
+# and the floor promoted it into slot 03 anyway, because the floor only counted
+# stories. The reader rejected the issue. The brief already forbids this in
+# capitals ("NEVER promote a bench reserve into the Top tier just to reach a
+# count — a bench story must clear the SAME three filters"); the code did not
+# agree with the brief, and the code runs last.
+#
+# The signal is the writer's own words. When it cannot verify a source it says
+# so in the excerpt rather than inventing one, so an excerpt that admits it is
+# unverified is a self-declared "do not promote".
+_UNVERIFIED_EXCERPT = re.compile(
+    r"unverified|could ?n.?t verify|could not verify|not verified|"
+    r"unable to verify|could not fetch|could ?n.?t fetch|fetch ?error|"
+    r"http\s*4\d\d|http\s*5\d\d|returned\s*http|paywall|"
+    r"facts? (?:could not|couldn.?t) be (?:verified|confirmed)",
+    re.I,
+)
+
+# A Top Story's claims are quote-anchored to source_excerpt; the Sr. Editor
+# verifies against it. An excerpt too short to hold 2-4 verbatim sentences
+# cannot anchor anything, so it is not promotable material either.
+_MIN_PROMOTABLE_EXCERPT = 80
+
+
+def _promotion_blocker(story):
+    """Why this bench reserve may not be promoted, or None if it may.
+
+    Kept as a reason string rather than a bool so the shortfall anomaly can
+    name the story AND the cause — a silent skip would read as "thin week"
+    when the real cause is "we found it and could not stand it up"."""
+    excerpt = (story or {}).get("source_excerpt") or ""
+    if not excerpt.strip():
+        return "no source_excerpt"
+    if _UNVERIFIED_EXCERPT.search(excerpt):
+        return "source_excerpt declares the source unverified"
+    if len(excerpt.strip()) < _MIN_PROMOTABLE_EXCERPT:
+        return f"source_excerpt too short to anchor claims ({len(excerpt.strip())} chars)"
+    return None
+
+
 def _enforce_top3_floor(top_stories, bench):
-    """Guarantee 3 top stories when the bench allows. Promote highest-ranked
-    bench reserves into the top tier until there are 3; if the bench can't fill
-    the gap, emit a LOUD anomaly so the shortfall surfaces in review — never pad
-    the top tier with a thin other_news item. Deterministic + unit-testable.
+    """Guarantee 3 top stories when the bench allows AND the reserve is fit to
+    promote. Promote highest-ranked bench reserves into the top tier until there
+    are 3, SKIPPING any reserve that fails _promotion_blocker (unverified or
+    unanchored source); if the gap can't be filled, emit a LOUD anomaly so the
+    shortfall surfaces in review — never pad the top tier with a thin other_news
+    item, and never with a story the writer could not stand up.
+    Deterministic + unit-testable.
     Returns (top_stories, remaining_bench, anomalies). See ticket §4A.
+
+    The floor is a floor, not a quota. Three verified stories is the goal; two
+    verified stories beats three where one is unverified, because the whole
+    brief trades on every claim being quote-anchored.
 
     Stays PURE and prose-only on purpose: review_server.build_approved_payload
     reuses it for bench promotion and discards the notes. The blocking finding is
@@ -243,18 +293,39 @@ def _enforce_top3_floor(top_stories, bench):
     reserve = list(bench or [])
     orig = len(top)
     anomalies: list[str] = []
+    skipped: list[str] = []
+    held: list = []
     while len(top) < TOP_STORY_FLOOR and reserve:
-        top.append(reserve.pop(0))
+        cand = reserve.pop(0)
+        blocker = _promotion_blocker(cand)
+        if blocker:
+            # Not promotable, but still a real bench story — keep it on the
+            # bench rather than dropping it, so the reviewer can see it and
+            # decide. Only its promotion is refused, not its existence.
+            held.append(cand)
+            headline = (cand or {}).get("headline") or "(untitled)"
+            skipped.append(f"'{headline[:60]}' ({blocker})")
+            continue
+        top.append(cand)
+    reserve = held + reserve
     promoted = len(top) - orig
     if promoted:
         anomalies.append(
             f"Top-3 floor: promoted {promoted} bench "
             f"stor{'y' if promoted == 1 else 'ies'} to fill the top tier (had {orig}).")
+    if skipped:
+        anomalies.append(
+            f"Top-3 floor: refused to promote {len(skipped)} bench "
+            f"stor{'y' if len(skipped) == 1 else 'ies'} on quality — "
+            + "; ".join(skipped)
+            + ". A short issue is correct here; an unverified Top Story is not.")
     if len(top) < TOP_STORY_FLOOR:
+        why = ("the bench had no reserves to promote" if not skipped
+               else "the only reserves available failed the promotion check")
         anomalies.append(
             f"Top-3 floor SHORT: only {len(top)} top "
             f"stor{'y' if len(top) == 1 else 'ies'} — expected {TOP_STORY_FLOOR}, and "
-            f"the bench had no reserves to promote. Review before sending.")
+            f"{why}. Review before sending.")
     return top, reserve, anomalies
 
 
@@ -746,6 +817,48 @@ def _compose_lead_hero(newsletter: str, payload: dict, issue_number: int) -> Non
         return  # fail-open: the B split card is always a valid outcome
 
 
+def _assert_not_unreviewed_send(args) -> int:
+    """Refuse the one invocation that mails fresh, unreviewed content to a real audience.
+
+    This script GENERATES an issue. It does not own the wire to a configured
+    audience — `nightly_send.py` does, and only after `approved_artifact.verify()`
+    clears the frozen bytes a human actually read.
+
+    But a bare `run_newsletter.py --newsletter <nl>` (no --dry-run, no
+    --create-draft-only, no --to) runs the agent loop and then resolves the real
+    recipient list from config/audiences/<pack>/recipients.json and sends it.
+    Nothing in that path consults an approval. It is the same shape as the two
+    incidents this repo already carries scar tissue for — № 007 shipping empty
+    on 2026-07-21, and the unauthorized 2026-07-23 send — except it skips review
+    entirely rather than racing it.
+
+    No caller uses this path: nightly-generate.yml passes --create-draft-only,
+    preview-send.yml passes --to, demo_server.py passes --dry-run, and
+    nightly-send.yml calls nightly_send.py. Verified 2026-08-01 before closing
+    it, so this breaks nothing that exists — it only removes the foot-gun.
+
+    Deliberately no env-var escape hatch. An override here would reconstitute
+    exactly the hole being closed, and the legitimate need it would serve
+    (send these bytes to these people) is what the approve → release → send
+    path is for.
+    """
+    if args.dry_run or args.create_draft_only or args.to:
+        return 0
+    nl = args.newsletter
+    print(
+        f"[{nl}] REFUSED — this would mail freshly-generated, unreviewed content to the\n"
+        f"  configured audience for '{nl}'. run_newsletter.py generates; it does not send\n"
+        f"  to a real list.\n\n"
+        f"  To send the issue a human approved:\n"
+        f"      python scripts/nightly_send.py {nl}\n"
+        f"  To generate a draft for review:   --create-draft-only --save-payload ...\n"
+        f"  To render without sending:        --dry-run\n"
+        f"  To preview to one address:        --to you@example.com\n",
+        file=sys.stderr,
+    )
+    return 5
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--newsletter", required=True,
@@ -773,6 +886,10 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+
+    rc = _assert_not_unreviewed_send(args)
+    if rc:
+        return rc
 
     newsletter = args.newsletter
     print(f"[{newsletter}] Starting run at {datetime.now(timezone.utc).isoformat()}")
@@ -975,8 +1092,8 @@ def main() -> int:
     # three facts" failure that teaches reflexive clearing.
     # The floor is therefore enforced once, against the FINAL approved content.
 
-    # HARD STOP: an issue with no top stories is not an issue. № 007 went to the
-    # Wallet team on 2026-07-21 as a masthead, three Other-News briefs and a
+    # HARD STOP: an issue with no top stories is not an issue. On 2026-07-21 an
+    # issue reached its readers as a masthead, three Other-News briefs and a
     # footer, because the (then-buggy) repeat guard emptied the top tier and
     # nothing downstream refused to send. The Top-3 floor logged "only 0 top
     # stories" and the run continued regardless — a loud log is not a gate.

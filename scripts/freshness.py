@@ -9,7 +9,7 @@ from datetime import date, timedelta
 
 
 def freshness_floor(today_iso: str, last_run_at: str | None = None,
-                    min_window_days: int = 7, max_window_days: int = 21) -> date:
+                    min_window_days: int = 10, max_window_days: int = 21) -> date:
     """Earliest publish date a story may have.
 
     Weekly cadence: anchor the window to the last SENT date so each issue covers
@@ -21,8 +21,12 @@ def freshness_floor(today_iso: str, last_run_at: str | None = None,
 
     The window is clamped to [min_window_days, max_window_days]:
       - never narrower than min_window_days — a same-day manual re-run, or a
-        newsletter with no send history yet, still looks back a full week instead
+        newsletter with no send history yet, still looks back ~10 days instead
         of starving; the ledger handles any overlap-driven repeats.
+        NOTE: on a weekly cadence the gap is ~7 days, so this min is what
+        actually sets the window on a normal run — it is not just a floor for
+        edge cases. Keep it in sync with `get_freshness_window`'s default and
+        with the "~10 days" the briefs document.
       - never wider than max_window_days — a long gap or a first issue won't drag
         in stale news.
     """

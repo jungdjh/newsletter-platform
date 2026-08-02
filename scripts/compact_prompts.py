@@ -80,10 +80,21 @@ def get_freshness_window(newsletter: str) -> tuple[int, int]:
     Fast fields (AI, Big Tech) want a tight window; a slow field (nursing) wants
     a wide one so a week with no hot news still surfaces relevant recent updates.
     A platform audience can override via `min_window_days` / `max_window_days` in
-    its generated spec. Absent → the default (7, 21) — every existing newsletter
-    is unaffected. The sent-stories ledger separately blocks repeats, so a wide
-    window never re-runs old items; it only widens what's *eligible*."""
-    default = (7, 21)
+    its generated spec. Absent → the default (10, 21). The sent-stories ledger
+    separately blocks repeats, so a wide window never re-runs old items; it only
+    widens what's *eligible*.
+
+    The min was 7 until 2026-07-29. On a weekly cadence `last_run_at` is ~7 days
+    back, so the clamp made 7 the *effective* window for every newsletter without
+    an override — while the briefs told the agent to search "~10 days". The agent
+    obeys the injected EARLIEST_ACCEPTABLE_DATE, not the prose, so stories in the
+    8-10 day band were found and then rejected. That is what cost a 2026-07-29 issue
+    the Oura launches (Ring 5, menopause insights, women's health AI, US Open), all of
+    which landed just before the July 22 edge. Raising the min to 10 makes the
+    computed floor match what the briefs have always documented. The four wide
+    per-audience overrides (nursing 120, tk-parents 60, first-time-homebuyers 30,
+    college-admissions 21) are unaffected — an explicit override still wins."""
+    default = (10, 21)
     import json as _json
     from pathlib import Path as _Path
     spec_path = _Path(__file__).resolve().parent.parent / "briefs" / f"{newsletter}.json"
