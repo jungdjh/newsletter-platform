@@ -18,14 +18,16 @@ Acknowledgement is an explicit act by the reviewer, recorded on the artifact, so
 "David saw this and shipped anyway" becomes a durable, auditable fact instead of
 a click that left no trace.
 
-ONE LIMIT, STATED PLAINLY so the next reader does not over-trust this:
-  guard_findings and acknowledged are not covered by html_sha256, so editing
-  the artifact JSON by hand can disarm the gate with the digest still valid.
+THE LIMIT, STATED PLAINLY so the next reader does not over-trust this:
+  artifact_sha256 (v3) covers guard_findings and acknowledged, so hand-editing
+  the saved JSON no longer disarms the gate. It is a digest, NOT a signature —
+  anyone who can run this code can re-seal a doctored file. It stops tampering
+  with a text editor, which is the threat that actually existed here; it does
+  not stop someone who is already executing the pipeline.
 
-(There used to be a second: `run_newsletter.py` had a direct send that resolved
-the real recipient list and never called verify(). Closed 2026-08-01 — that path
-now refuses outright, so verify() on the nightly_send path is no longer being
-asked to stand in for a gate that did not exist.)
+(Two earlier limits are gone. `run_newsletter.py` had a direct send that never
+called verify() — closed 2026-08-01, that path now refuses outright. And the
+artifact hash covered only the HTML — closed by v3 the same day.)
 
 WHY THIS IS NOT SIMPLY "BLOCK ON EVERY `decide` ANOMALY"
 -------------------------------------------------------

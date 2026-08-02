@@ -167,6 +167,7 @@ def test_runs_as_a_script_with_an_approval():
            "recipients_expected": ["a@example.com"], "to": ["a@example.com"], "bcc": [],
            "reply_to": "a@example.com", "top_story_count": 3, "other_news_count": 0,
            "images": [], "approved_at": ""}
+    art["artifact_sha256"] = aa.artifact_digest(art)
     approved = repo / "review" / "approved" / f"{nl}.json"
     approved.parent.mkdir(parents=True, exist_ok=True)
     approved.write_text("{}")
