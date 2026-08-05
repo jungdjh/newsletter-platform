@@ -205,21 +205,105 @@ def _resolve_issue_number(last_issue, payload_issue) -> int:
     return max(nxt, int(payload_issue))
 
 
-def _dedup_bench(top_stories, bench):
-    """Drop bench reserves that reuse a Top story's source URL — a cheap guard
-    against the same article landing both up top and on the bench. Semantic
-    near-duplicates on different URLs (e.g. two filings of one legal saga) are
-    the prompt's job, not this. Returns (bench, dropped_notes)."""
-    def _norm(u):
-        return (u or "").split("?")[0].split("#")[0].rstrip("/").lower()
-    top_urls = {_norm(s.get("source_url")) for s in (top_stories or []) if _norm(s.get("source_url"))}
-    kept, notes = [], []
-    for b in (bench or []):
-        if _norm(b.get("source_url")) in top_urls:
-            notes.append(f"Bench: dropped '{str(b.get('headline', ''))[:50]}' — same source as a Top Story.")
+def _norm_headline(h) -> str:
+    """Coarse headline identity: case and stray whitespace are not editorial
+    differences. Secondary to the URL — a syndicated story can reach us under
+    two URLs with one headline."""
+    return " ".join(str(h or "").split()).lower()
+
+
+def _dedup_buckets(top_stories, other_news, bench):
+    """Drop any item that repeats one already seated earlier in the issue.
+
+    This compared the bench against the top tier and nothing else, which left
+    `other_news` deduped against nothing. An audit of the sent archive found the
+    same article shipped twice in one email — identical headline, identical URL —
+    in 4 of 17 issues: ledger-006 and ledger-007 (Top Story 03 running again as
+    Other News), download-014, nursing-001. ledger-007 shipped "GENIUS Act
+    stablecoin rules still unfinished at 1 year" as Top Story 03 and again as
+    Other News 02 off the same coindesk.com URL. Nothing semantic was going on;
+    it was set membership nobody checked.
+
+    So: one pass over the three buckets in priority order, first occurrence
+    wins, and identity is the NORMALISED HEADLINE.
+
+    URL identity was the obvious choice and it is wrong here. It was written,
+    then measured against all 26 stored payloads: it caught the 2 real
+    duplicates and also dropped 13 legitimate items. Making the URL key sharper
+    (keeping the query, ignoring bare-domain citations) did not help, because
+    the false drops are not a normalisation bug. They are the product working as
+    intended. `review/pending/nursing.json` cites
+    `ohlone.edu/nursing/educational-plan` for two genuinely different facts —
+    "Ohlone ADN graduates can bridge to CSU East Bay BSN" in the top tier and
+    "Ohlone pre-nursing AS covers most ADN and CSU prereqs" in Other News. One
+    reference page backing several items is normal for the institutional briefs.
+
+    Both real duplicates repeat the headline as well as the URL: ledger-007 ran
+    "GENIUS Act stablecoin rules still unfinished at 1 year" off the same
+    coindesk URL in both the top tier and Other News, and ledger-006 did the
+    same. So the headline alone catches every duplicate in the archive and drops
+    nothing legitimate, which is why the URL check is gone rather than kept "for
+    safety" — an unused second key here is not armor, it is 13 deletions.
+
+    Headline identity also covers the syndicated case for free: one story
+    reaching us under two hosts shares its headline.
+
+    The known gap, stated rather than guarded against: the same article
+    re-titled in each bucket would survive. Nothing in 26 payloads does that. If
+    it ever ships, the fix is a headline-similarity threshold, not the URL.
+
+    This is deliberately NOT semantic matching: two DIFFERENT articles on one
+    topic are a legitimate issue and both must survive. That judgement stays the
+    prompt's.
+
+    Runs ahead of the Top-3 floor, so a top story dropped here gets refilled
+    from the bench rather than leaving a hole.
+
+    Returns (top_stories, other_news, bench, dropped_notes). The notes go into
+    `anomalies`, which is what the review console surfaces."""
+    seen_headlines: set[str] = set()
+    kept: dict[str, list] = {}
+    notes: list[str] = []
+    for label, key, items in (("Top Stories", "top", top_stories),
+                              ("Other News", "other", other_news),
+                              ("Bench", "bench", bench)):
+        out = []
+        for item in (items or []):
+            headline = _norm_headline(item.get("headline"))
+            # An item with no headline has no identity, so it can never be a
+            # duplicate of anything. Two untitled items must not cancel out.
+            if headline and headline in seen_headlines:
+                notes.append(
+                    f"{label}: dropped '{str(item.get('headline', ''))[:50]}' — "
+                    f"same headline as an item already in this issue.")
+                continue
+            if headline:
+                seen_headlines.add(headline)
+            out.append(item)
+        kept[key] = out
+
+    # The bench keeps its ORIGINAL url-vs-top check, on top of the headline pass.
+    #
+    # This predates cross-bucket dedup and is deliberately preserved. It has the
+    # same false-positive shape described above (3 bench items in the archive
+    # share a top story's URL under a different headline), but the cost is not
+    # the same: the bench is a RESERVE, so a wrongly dropped reserve only means
+    # one fewer candidate for the Top-3 floor to promote. Nothing leaves the
+    # issue. Dropping from Top Stories or Other News deletes published content,
+    # which is why those two get the precise check and the bench keeps the
+    # cautious one.
+    top_urls = {_norm_url(s.get("source_url")) for s in kept["top"]
+                if _norm_url(s.get("source_url"))}
+    bench_out = []
+    for b in kept["bench"]:
+        if _norm_url(b.get("source_url")) in top_urls:
+            notes.append(f"Bench: dropped '{str(b.get('headline', ''))[:50]}' — "
+                         f"same source as a Top Story.")
         else:
-            kept.append(b)
-    return kept, notes
+            bench_out.append(b)
+    kept["bench"] = bench_out
+
+    return kept["top"], kept["other"], kept["bench"], notes
 
 
 # The declared top-tier floor. The post-№ 007 hard stop only refuses 0 stories,
@@ -260,7 +344,21 @@ def _promotion_blocker(story):
 
     Kept as a reason string rather than a bool so the shortfall anomaly can
     name the story AND the cause — a silent skip would read as "thin week"
-    when the real cause is "we found it and could not stand it up"."""
+    when the real cause is "we found it and could not stand it up".
+
+    `bench_only` is the writer's own refusal and outranks the quality checks.
+    _drop_repeats catches a repeat by URL, but the same subject under a second
+    URL is an editorial judgement only the writer can make — and on 2026-08-02
+    it made it, wrote "SFSU ADN-BSN already covered in prior issues — moved to
+    bench only" into the anomalies, and the floor promoted that story into the
+    LEAD slot anyway, because prose is not a signal this function can read.
+    Now it is one."""
+    bench_only = (story or {}).get("bench_only")
+    if isinstance(bench_only, str) and bench_only.strip():
+        return f"writer marked bench-only: {bench_only.strip()[:80]}"
+    if bench_only is True:            # tolerate a bare bool from an older payload
+        return "writer marked bench-only"
+
     excerpt = (story or {}).get("source_excerpt") or ""
     if not excerpt.strip():
         return "no source_excerpt"
@@ -1010,10 +1108,14 @@ def main() -> int:
         for _msg in dropped_other:
             print(f"[{newsletter}] {_msg}", file=sys.stderr)
 
-    # Drop any bench reserve that reuses a Top story's source (cheap dup guard)
-    # BEFORE the floor could promote it. Semantic near-dups are the prompt's job.
-    bench_deduped, dedup_notes = _dedup_bench(
-        payload.get("top_stories") or [], payload.get("bench") or [])
+    # Drop any item that repeats one already seated earlier in the issue, across
+    # all three buckets, BEFORE the floor could promote a repeat off the bench.
+    # Semantic near-dups are the prompt's job; this only catches the same article.
+    top_deduped, other_deduped, bench_deduped, dedup_notes = _dedup_buckets(
+        payload.get("top_stories") or [], payload.get("other_news") or [],
+        payload.get("bench") or [])
+    payload["top_stories"] = top_deduped
+    payload["other_news"] = other_deduped
     payload["bench"] = bench_deduped
     if dedup_notes:
         payload.setdefault("anomalies", []).extend(dedup_notes)

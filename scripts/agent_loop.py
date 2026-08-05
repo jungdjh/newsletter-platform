@@ -35,6 +35,7 @@ The expected final-output shape (Claude is instructed to produce this JSON):
 
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -351,6 +352,21 @@ _STATIC_TOOL_SCHEMAS = [
 for _t in _STATIC_TOOL_SCHEMAS:
     if _t.get("name") == "submit_newsletter":
         _submit_props = _t["input_schema"]["properties"]
+        # Deep copy, NOT the shared object: bench items carry `bench_only`, and
+        # a top story cannot. Aliasing the two would offer the field on both.
+        _bench_item = copy.deepcopy(_submit_props["top_stories"]["items"])
+        _bench_item.setdefault("properties", {})["bench_only"] = {
+            "type": "string",
+            "description": (
+                "OPTIONAL. Set this ONLY when the story must not be promoted into the "
+                "Top tier, and say why in one short phrase — most often 'already covered "
+                "in issue N' for a subject the newsletter has run before under a "
+                "different URL. Leave it out for a normal reserve. "
+                "The Top-3 floor promotes reserves automatically to fill a short top "
+                "tier; it cannot read your anomaly notes, so a repeat you benched in "
+                "prose alone WILL be promoted into the lead slot."
+            ),
+        }
         _submit_props["bench"] = {
             "type": "array",
             "description": (
@@ -358,9 +374,11 @@ for _t in _STATIC_TOOL_SCHEMAS:
                 "top_stories. Held back so the reviewer can backfill a dropped top "
                 "story without regenerating. Draft real, verified reserves from your "
                 "next-strongest candidates — never filler. Omit or leave empty on a "
-                "thin news day; never invent a reserve to hit the count."
+                "thin news day; never invent a reserve to hit the count. "
+                "If a reserve is here because you already covered the subject, set "
+                "`bench_only` on it — otherwise the floor may promote it to the lead."
             ),
-            "items": _submit_props["top_stories"]["items"],
+            "items": _bench_item,
             "maxItems": 3,
         }
         break

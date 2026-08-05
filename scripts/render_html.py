@@ -26,6 +26,7 @@ Where:
 
 from __future__ import annotations
 
+import re
 from html import escape
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -361,8 +362,13 @@ def render_newsletter(
     # Pack newsletters use bespoke palettes; platform audiences get a derived
     # palette with branding text pulled from briefs/<name>.json.
     palette = _effective_palette(newsletter)
-    top_stories = _enforce_top_stories_caps(content.get("top_stories") or [])
-    other_news = _trim_other_news(content.get("other_news") or [])
+    # `notes` collects the fields the caps could NOT cut at a sentence boundary.
+    # They are recorded onto content["anomalies"] below so the review console
+    # surfaces them the same way it surfaces every other operational note.
+    notes: list[dict[str, str]] = []
+    top_stories = _enforce_top_stories_caps(content.get("top_stories") or [], notes)
+    other_news = _trim_other_news(content.get("other_news") or [], notes)
+    _record_truncation_anomalies(content, notes)
 
     html = _build_html(palette, top_stories, other_news, meta, editor_concerns,
                        include_reply_footer=include_reply_footer)
@@ -403,37 +409,271 @@ def _truncate_chars_word(text: str, max_chars: int) -> str:
     return head.rstrip(" ,;:.—-") + "…"
 
 
-def _enforce_top_stories_caps(stories: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Trim each top story's summary (≤35 words) and implications bullets (≤14 words). Cap to 3."""
+# --- Sentence-boundary capping ----------------------------------------------
+#
+# The word/char caps above are the ORIGINAL behaviour and are now the FALLBACK
+# only. They cut at word N regardless of where the thought ended, which
+# amputated the product's core value. Measured 2026-08-04 over 26 payloads (16
+# archived in review/sent/, 10 drafts in review/pending/): of 280 capped prose
+# fields, 97 were shortened and 97 of those 97 ended mid-sentence. Every
+# archived issue had at least one; the pending ledger draft had five.
+# "Track the FDA's response to WHOOP's blood pressure…" is not an implication,
+# it is the first half of one.
+#
+# David's decision (2026-08-04): cut at the last COMPLETE SENTENCE that fits.
+# When not even one whole sentence fits, do NOT cut mid-word silently — flag the
+# field into payload["anomalies"] so the run reaches the review console marked
+# for a human call, and fall back to the old clip so the issue still renders.
+
+# Tokens that end in a period WITHOUT ending a sentence. A small explicit list
+# beats a clever regex here: this text is real prose written by an LLM about
+# companies ("Inc.", "Corp."), places ("U.S."), people ("Dr.", "Ph.D.") and
+# nursing/finance credentials ("R.N.", "B.S.N."), and a false sentence break
+# would silently ship half a thought — the exact failure this change exists to
+# stop. Lowercased, with the trailing period included.
+_ABBREVIATIONS = frozenset({
+    # titles + names
+    "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "st.", "rev.", "hon.",
+    "gov.", "sen.", "rep.", "gen.", "lt.", "col.", "capt.", "sgt.",
+    # organisations + legal forms
+    "inc.", "ltd.", "co.", "corp.", "llc.", "plc.", "dept.", "univ.", "assn.",
+    # latin + editorial
+    "e.g.", "i.e.", "etc.", "cf.", "al.", "viz.", "ibid.", "vs.", "approx.",
+    "est.", "fig.", "vol.", "ed.", "pp.", "no.", "op.",
+    # places + times
+    "u.s.", "u.k.", "u.n.", "e.u.", "d.c.", "a.m.", "p.m.",
+    "ave.", "blvd.", "rd.", "mt.", "ft.",
+    # credentials the nursing / ledger audiences actually use
+    "ph.d.", "m.d.", "r.n.", "l.v.n.", "b.s.", "m.s.", "b.a.", "m.a.",
+    "b.s.n.", "a.d.n.", "m.s.n.", "n.p.", "c.p.a.",
+    # months (datelines)
+    "jan.", "feb.", "mar.", "apr.", "jun.", "jul.", "aug.", "sept.", "sep.",
+    "oct.", "nov.", "dec.",
+})
+
+# A terminator run, plus any closing quote/bracket, that is followed by
+# whitespace or the end of the string. Requiring whitespace after is what makes
+# decimals safe with no extra rule: in "5.79%" and "$1.2B" the period is
+# followed by a digit, so it is never a candidate in the first place.
+_TERMINATOR_RE = re.compile(r'([.!?]+)[)\]"\'”’»]*(?=\s|$)')
+# One letter + period ("J. Smith", "E. coli") — an initial, not a sentence end.
+_INITIAL_RE = re.compile(r'^[a-z]\.$')
+
+
+def _sentence_ends(text: str) -> list[int]:
+    """Index one-past every REAL sentence terminator in `text`.
+
+    Rejects the three shapes that look like sentence ends and are not:
+      ellipsis  — "the deal stalled... for now"  (a run of 2+ dots)
+      abbrev    — "filed with the U.S. regulator" (see _ABBREVIATIONS)
+      initial   — "J. Powell said"                (single letter + period)
+    Decimals need no rule: "5.79%" has no whitespace after the period.
+    """
+    ends: list[int] = []
+    for m in _TERMINATOR_RE.finditer(text):
+        run = m.group(1)
+        # "wait..." / "stalled.." — an ellipsis, not a full stop.
+        if len(run) > 1 and set(run) == {"."}:
+            continue
+        # U+2026 is not in the character class at all, so a real "…" never
+        # reaches here. This catches the typed-out three-dot form.
+        head = text[:m.end()]
+        token_match = re.search(r'\S+$', head)
+        token = token_match.group(0).lower() if token_match else ""
+        token = token.lstrip("([\"'“‘«")
+        if token in _ABBREVIATIONS or _INITIAL_RE.match(token):
+            continue
+        # Two SHAPE rules, because _ABBREVIATIONS is a fixed list and the copy
+        # is not. The first version of this splitter shipped with a 60-entry
+        # list and an adversarial read broke it in a minute: "Enterprise A.I.
+        # spending is up..." came back as "Enterprise A.I." — two words, no
+        # flag, where the old word-clipper would have shipped fourteen usable
+        # ones. A.I., I.P.O., E.S.G., F.D.A., R.O.I., Adm., a leading "1." or
+        # "Q4." — the list reopens with every new piece of copy, and these
+        # newsletters are AI- and finance-themed.
+        #
+        # Both rules bias the same way on purpose. REJECTING a real boundary is
+        # safe: the field falls through to the flag-and-fallback path and a
+        # human sees it. ACCEPTING a false one ships a fragment silently, which
+        # is the failure this whole change exists to remove.
+        # Both shape rules apply only when text FOLLOWS the candidate boundary.
+        # At the very end of the string an abbreviation and a full stop are
+        # indistinguishable, and calling it an end costs nothing: there is no
+        # remainder to amputate. "Filings follow in Q4." must terminate.
+        at_end = m.end() >= len(text.rstrip())
+        if not at_end:
+            if "." in token[:-1]:
+                continue      # A.I. / I.P.O. / U.S.S.R. — internal periods
+            if len(token) <= 3:
+                continue      # "1." "q4." "adm." "no." — too short to end a sentence
+        ends.append(m.end())
+    return ends
+
+
+def _fits(text: str, max_words: int | None, max_chars: int | None) -> bool:
+    if max_words is not None and len(text.split()) > max_words:
+        return False
+    if max_chars is not None and len(text) > max_chars:
+        return False
+    return True
+
+
+# Backstop only. The shape rules in _sentence_ends do the real work; this
+# catches whatever still slips through and turns a fragment into a flag.
+# Deliberately absolute, not a fraction of the budget: a fraction rejected
+# "Rails shifted." — a genuine two-word sentence — for being small relative to
+# a 72-char cap, which is a quality regression the shape rules do not need.
+_MIN_KEPT_CHARS = 12
+
+
+def _fit_sentences(text: str, max_words: int | None, max_chars: int | None) -> str | None:
+    """The longest run of whole sentences from the start of `text` that fits
+    every budget, or None when not even the first sentence fits.
+
+    The floor below is the important part, and it exists because the sentence
+    splitter cannot be made complete. `_ABBREVIATIONS` is a fixed list, so any
+    dotted initialism it has not heard of reads as a sentence end: an over-cap
+    bullet like "Enterprise A.I. spending is up and the real story is
+    procurement cycles" came back as "Enterprise A.I." — two words, no flag.
+    The old word-clipper would have shipped fourteen usable ones. That is the
+    change making things worse than what it replaced, silently, which is the one
+    outcome this whole rewrite exists to prevent.
+
+    Widening the abbreviation list does not fix it. A.I., I.P.O., E.S.G., F.D.A.,
+    R.O.I., Calif., Adm., a leading "1." or "Q4." — the list reopens with every
+    new piece of copy, and these newsletters are AI- and finance-themed.
+
+    So instead of trusting the boundary, distrust an absurdly short result. A
+    "sentence" holding a small fraction of the budget is a false positive
+    whatever produced it, and returning None sends the field down the
+    flag-and-fall-back path, where a human sees it. No silence.
+    """
+    best: str | None = None
+    for end in _sentence_ends(text):
+        candidate = text[:end].rstrip()
+        if not _fits(candidate, max_words, max_chars):
+            break          # prefixes only grow — nothing further will fit
+        best = candidate
+    if best is not None and len(best) < _MIN_KEPT_CHARS:
+        return None
+    return best
+
+
+def _cap_to_sentence(text: Any, label: str, notes: list[dict[str, str]], fallback,
+                     *, max_words: int | None = None, max_chars: int | None = None) -> Any:
+    """Cap `text` at a sentence boundary, or flag the field and fall back.
+
+    Text that already fits is returned UNTOUCHED. That is load-bearing: an
+    implication bullet is usually one sentence with no terminal period, and a
+    renderer that "helpfully" appended one would be rewriting the editor's copy.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return text
+    if _fits(text, max_words, max_chars):
+        return text
+    kept = _fit_sentences(text, max_words, max_chars)
+    if kept is not None:
+        return kept
+    budget = []
+    if max_words is not None:
+        budget.append(f"{max_words} words")
+    if max_chars is not None:
+        budget.append(f"{max_chars} characters")
+    notes.append({
+        "severity": "decide",
+        "message": (f"{label}: the first sentence is longer than the cap of "
+                    f"{' / '.join(budget)}, so it was cut mid-sentence. "
+                    f"Shorten it or review before sending."),
+    })
+    return fallback(text)
+
+
+def _record_truncation_anomalies(content: Any, notes: list[dict[str, str]]) -> None:
+    """Put the flags where every other anomaly already goes: content["anomalies"].
+
+    That list is what build_review renders into the console banner and what
+    approved_artifact copies onto the frozen artifact, so a mid-sentence cut is
+    now visible in the same place as a stale story or a Top-3 shortfall.
+    Deduped by message because the same content is rendered more than once per
+    issue (generate, then again at approval) and one problem must cost one line.
+    """
+    if not notes or not isinstance(content, dict):
+        return
+    existing = content.setdefault("anomalies", [])
+    if not isinstance(existing, list):
+        return
+    seen = {(a.get("message") if isinstance(a, dict) else str(a)) for a in existing}
+    for note in notes:
+        if note["message"] in seen:
+            continue
+        existing.append(note)
+        seen.add(note["message"])
+
+
+def truncation_anomalies(content: dict[str, Any] | None) -> list[dict[str, str]]:
+    """The mid-sentence-cut flags a render of `content` would raise, WITHOUT
+    rendering. The review console calls this so it warns about the cut even
+    when the pending payload on disk was written before the render that would
+    have recorded it (run_newsletter --save-payload runs first)."""
+    notes: list[dict[str, str]] = []
+    c = content or {}
+    _enforce_top_stories_caps(c.get("top_stories") or [], notes)
+    _trim_other_news(c.get("other_news") or [], notes)
+    return notes
+
+
+def _enforce_top_stories_caps(stories: list[dict[str, Any]],
+                              notes: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
+    """Trim each top story's summary (≤35 words) and implications bullets (≤14 words). Cap to 3.
+
+    Cuts land on a sentence boundary; a field whose first sentence overruns the
+    cap is appended to `notes` and clipped the old way so the issue still
+    renders. `notes` is optional so the hash/replay callers that only want the
+    capped view (composed_inputs_hash) stay a one-argument call."""
+    sink = notes if notes is not None else []
     out = []
-    for story in stories[:3]:
+    for idx, story in enumerate(stories[:3]):
         if not story:
             continue
         s = dict(story)
+        where = f"Story {idx + 1:02d}"
         if s.get("summary"):
-            s["summary"] = _truncate_words(s["summary"], 35)
+            s["summary"] = _cap_to_sentence(
+                s["summary"], f"{where} summary", sink,
+                lambda t: _truncate_words(t, 35), max_words=35)
         if isinstance(s.get("implications"), list):
             s["implications"] = [
-                _truncate_words(b, 14) if isinstance(b, str) else b
-                for b in s["implications"]
+                _cap_to_sentence(b, f"{where} implication {j + 1}", sink,
+                                 lambda t: _truncate_words(t, 14), max_words=14)
+                if isinstance(b, str) else b
+                for j, b in enumerate(s["implications"])
             ]
         out.append(s)
     return out
 
 
-def _trim_other_news(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _trim_other_news(items: list[dict[str, Any]],
+                     notes: list[dict[str, str]] | None = None) -> list[dict[str, Any]]:
     """Trim Other News fields: headline (≤80 chars), subtitle (≤14 words, ≤72 chars).
     NO summary in Other News — it's a scan-only block. Track + Headline +
     Subtitle + Source URL only. The subtitle char cap (~72) keeps it to a
     single rendered line at the ~500px content width / 13px font — the CSS
-    one-line clamp can't be relied on in email tables, so it hard-cuts."""
+    one-line clamp can't be relied on in email tables, so it hard-cuts.
+
+    The subtitle is capped against BOTH budgets at once, so the char cap can
+    never re-cut a sentence the word cap had just kept whole. The headline is
+    not prose and keeps its plain char clip."""
+    sink = notes if notes is not None else []
     out = []
-    for item in items[:5]:
+    for idx, item in enumerate(items[:5]):
         clean = dict(item)
         if clean.get("headline"):
             clean["headline"] = _truncate_chars(clean["headline"], 80)
         if clean.get("subtitle"):
-            clean["subtitle"] = _truncate_chars_word(_truncate_words(clean["subtitle"], 14), 72)
+            clean["subtitle"] = _cap_to_sentence(
+                clean["subtitle"], f"Other News {idx + 1:02d} subtitle", sink,
+                lambda t: _truncate_chars_word(_truncate_words(t, 14), 72),
+                max_words=14, max_chars=72)
         # Strip summary if agent sent one (no longer rendered)
         clean.pop("summary", None)
         out.append(clean)
@@ -1243,20 +1483,44 @@ def _cn_composed_ok(story: dict) -> bool:
 
 
 def _cn_composed_hero_card(t: dict, story: dict) -> str:
-    """The 'A' treatment: an HTML '01 / BIG SIGNAL' header above the pre-composited
-    hero image. The numeral + chip are HTML text (not baked) so Story 01's number
-    survives even when the inbox blocks or fails to load the image — otherwise the
-    live-text B cards (02, 03) become the first visible card and numbering appears
-    to start at 02. The image bakes the headline/summary/bullets/CTA (mail clients
-    can't render text-over-photo HTML); the card links to the source; alt carries
-    the full headline for accessibility; the plaintext body carries the full text."""
-    url = escape(_safe_url(story.get("composed_hero_url")))
+    """The 'A' treatment: an HTML '01 / BIG SIGNAL' header, the pre-composited
+    hero image, then the lead's summary and implications as LIVE HTML text.
+
+    The numeral + chip are HTML text (not baked) so Story 01's number survives
+    when the inbox blocks or fails to load the image — otherwise the live-text B
+    cards (02, 03) become the first visible card and numbering appears to start
+    at 02.
+
+    The live text below the image is the same fix one level further in. Until
+    2026-08-04 this card was a numeral, a chip and an <img>: the summary and BOTH
+    implications existed ONLY as pixels inside the baked JPEG, and the alt text
+    carried the headline alone. In any client that blocks images — the corporate
+    default — the Big Signal, the one story we say matters most, rendered as "01
+    BIG SIGNAL" and a single alt line. David's decision: keep the image as the
+    visual AND render the words as text. Nothing here duplicates live HTML that
+    already existed on this card; the headline stays in alt (the baked image
+    carries it at display size, and repeating it under the photo would read as a
+    stutter in clients that DO load images).
+
+    Same markup as the B split card's summary/bullets rows — nested tables,
+    bgcolor on the panel, no gradients — so it inherits the dark-mode behaviour
+    that layout already survives in Gmail iOS."""
     href = escape(_safe_url(story.get("source_url")))
     alt = escape(story.get("headline", ""))
+    summary = escape(story.get("summary", "") or "")
+    summary_row = (
+        f'<tr><td style="padding:18px 28px 0 28px; font-family:{SANS}; font-size:14px; '
+        f'line-height:1.65; color:{t["body_gray"]};">{summary}</td></tr>'
+    ) if summary else ""
+    bullets_row = _cn_bullets(t, story.get("implications"))
+    has_text = bool(summary_row or bullets_row)
+    # The image keeps the card's rounded bottom only when it IS the bottom.
+    img_radius = "0" if has_text else "0 0 10px 10px"
+    url = escape(_safe_url(story.get("composed_hero_url")))
     img = (
         f'<img src="{url}" width="560" height="672" alt="{alt}" '
         f'style="display:block; width:100%; max-width:100%; height:auto; border:0; '
-        f'border-radius:0 0 10px 10px;">'
+        f'border-radius:{img_radius};">'
     )
     if href:
         img = f'<a href="{href}" style="text-decoration:none;">{img}</a>'
@@ -1271,11 +1535,15 @@ def _cn_composed_hero_card(t: dict, story: dict) -> str:
         f'BIG&nbsp;SIGNAL</span></td>'
         f'</tr></table></td></tr>'
     )
+    tail_row = (
+        '<tr><td style="height:28px; line-height:28px; font-size:0;">&nbsp;</td></tr>'
+    ) if has_text else ""
     return (
         f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" '
         f'bgcolor="{t["panel"]}" style="background:{t["panel"]}; border-radius:10px;">'
         + meta_row
         + f'<tr><td style="padding:0; font-size:0; line-height:0;">{img}</td></tr>'
+        + summary_row + bullets_row + tail_row
         + '</table>'
     )
 

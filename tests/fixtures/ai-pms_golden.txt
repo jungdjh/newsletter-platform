@@ -3,14 +3,14 @@ AI Product / Intel
 
 01 [BIG SIGNAL]  Claude Sonnet 4.5 silently broke production structured outputs
      Agents & Tooling · San Francisco
-     A team running a Claude-powered reporting pipeline discovered that upgrading to Sonnet 4.5 caused the model to fold JSON payload fields and start asking clarifying questions — behaviors that crashed downstream systems. Rolling back to…
+     A team running a Claude-powered reporting pipeline discovered that upgrading to Sonnet 4.5 caused the model to fold JSON payload fields and start asking clarifying questions — behaviors that crashed downstream systems.
      → Pin model versions in prod and run structured-output evals before every upgrade
      → Design pipelines to handle clarifying-question responses, not just structured JSON
      ↳ https://venturebeat.com/orchestration/when-claude-changed-everything-changed-managing-ai-blast-radius-in-production
 
 02  OpenAI Lockdown Mode limits agent features to block prompt injection
      Evals & Quality · San Francisco
-     OpenAI is rolling out Lockdown Mode to ChatGPT Business accounts, disabling live web browsing, image retrieval, deep research, and agent mode. The goal is to reduce data exfiltration risk from prompt injection — though OpenAI…
+     OpenAI is rolling out Lockdown Mode to ChatGPT Business accounts, disabling live web browsing, image retrieval, deep research, and agent mode.
      → Evaluate Lockdown Mode for any ChatGPT Business deployment handling sensitive customer data
      → Treat prompt injection as a first-class threat in your agent security model, not an…
      ↳ https://techcrunch.com/2026/06/06/openai-unveils-lockdown-mode-to-protect-sensitive-data-from-prompt-injection-attacks/
