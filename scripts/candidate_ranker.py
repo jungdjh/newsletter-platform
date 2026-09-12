@@ -80,7 +80,7 @@ def rank_candidates(
             # ~40 tokens per ranking object × up to 25 candidates needs headroom;
             # 1024 truncated the forced tool_use mid-array and dropped the rankings.
             max_tokens=2048,
-            temperature=0,
+            extra_body={"temperature": 0},  # anthropic 1.x removed the keyword; see sr_editor.py
             system=(
                 "You score news leads by RELEVANCE to a newsletter's specific audience. "
                 "Use the brief below to judge who the audience is and what is in/out of scope. "

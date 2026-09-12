@@ -1455,6 +1455,14 @@ def _cn_footer_card(t: dict, p: dict, meta: dict, issue_str: str, include_reply_
     )
 
 
+# What the Story-01 picture currently draws. Part of composed_inputs_hash, so a
+# change here invalidates every hero baked under the old recipe and they
+# recompose on their next run instead of silently staying stale.
+#   v1  headline + summary + implications + korean + kicker baked in
+#   v2  summary and implications moved to live HTML (2026-08-05)
+BAKE_RECIPE = "v2"
+
+
 def composed_inputs_hash(story: dict) -> str:
     """Fingerprint of the text baked into a pre-composited 'A' hero.
 
@@ -1462,11 +1470,23 @@ def composed_inputs_hash(story: dict) -> str:
     length-capped view the renderer sees) and again at render time; the baked
     card is used ONLY while they match. Any HITL console edit to the lead's text
     changes the hash → the renderer falls back to the live-text B split card, so
-    a stale baked image can never ship."""
+    a stale baked image can never ship.
+
+    BAKE_RECIPE below is part of the fingerprint because the hash has to answer
+    "is the picture on disk the one this recipe would produce now", not just "has
+    the copy changed". When summary and implications stopped being baked
+    (2026-08-05), every already-composed hero still had them burned in, and its
+    hash still matched, so _compose_lead_hero skipped it as up to date. Those
+    issues would have shown the prose twice, once in pixels and once in the new
+    live text, and no amount of correct new code would have fixed them because
+    nothing would have re-run. Bumping the recipe invalidates them all at once.
+
+    Bump BAKE_RECIPE whenever what gets drawn into the image changes."""
     import hashlib
     kr = story.get("korean_takeaway")
     kr_s = "|".join(str(x) for x in kr) if isinstance(kr, list) else str(kr or "")
     parts = [
+        BAKE_RECIPE,
         story.get("headline", "") or "",
         story.get("summary", "") or "",
         "|".join(b for b in (story.get("implications") or []) if isinstance(b, str)),

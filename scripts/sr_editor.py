@@ -325,7 +325,15 @@ def review(
         ],
         # Low temperature for deterministic editorial verdicts. Cuts run-to-run
         # variance on FAIL/PASS calls, which made retest interpretation hard.
-        temperature=0.1,
+        #
+        # Passed through extra_body, not as a keyword: anthropic 1.x removed the
+        # `temperature` keyword from messages.create() (TypeError), and the
+        # unpinned `anthropic>=0.40.0` resolved to 1.x on the CI runner, which is
+        # exactly how the 2026-09-01 scheduled eval died in 18 seconds. The API
+        # still honours the field on this model, and the four recorded eval
+        # passes were measured at 0.1, so the setting is kept rather than dropped.
+        # extra_body merges into the request JSON as-is on 0.x and 1.x alike.
+        extra_body={"temperature": 0.1},
     )
     from scripts import usage_meter
     usage_meter.record(getattr(response, "usage", None))

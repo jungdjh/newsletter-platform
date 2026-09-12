@@ -542,7 +542,9 @@ def run_agent(
                     system=system_blocks,
                     tools=tool_schemas,
                     messages=messages,
-                    temperature=0.1,
+                    # Via extra_body: anthropic 1.x removed the keyword (see
+                    # sr_editor.py for the CI failure this caused).
+                    extra_body={"temperature": 0.1},
                 )
                 from scripts import usage_meter
                 usage_meter.record(getattr(_resp, "usage", None))

@@ -1,3 +1,6 @@
+# 0.x and 1.x both work: the four call sites pass `temperature` through
+# extra_body because 1.x removed the keyword argument (2026-09-01 CI failure).
+# 1.x needs Python >= 3.10; on 3.9 pip resolves the last 0.x release.
 anthropic>=0.40.0
 notion-client>=2.2.1
 requests>=2.32.0

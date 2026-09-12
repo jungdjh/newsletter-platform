@@ -249,7 +249,8 @@ def generate_brief_spec(audience: str) -> dict[str, Any]:
         "Return ONLY the JSON object."
     )
     resp = client.messages.create(
-        model=MODEL, max_tokens=2048, temperature=0.2,
+        model=MODEL, max_tokens=2048,
+        extra_body={"temperature": 0.2},  # anthropic 1.x removed the keyword; see sr_editor.py
         system=sys_prompt,
         messages=[{"role": "user", "content": f"Audience: {audience}"}],
     )

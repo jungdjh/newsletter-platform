@@ -40,6 +40,7 @@ sys.path.insert(0, str(REPO_ROOT))
 # without ANTHROPIC_API_KEY or the anthropic SDK installed (zero-API replay).
 from scripts.render_html import render_newsletter, _effective_palette  # noqa: E402
 from scripts import guard_findings  # noqa: E402
+from scripts import generate_stop  # noqa: E402
 
 
 class RecipientMismatch(RuntimeError):
@@ -889,6 +890,29 @@ def _compose_lead_hero(newsletter: str, payload: dict, issue_number: int) -> Non
         bake_view = dict(capped)
         if not entry.get("wants_korean"):
             bake_view.pop("korean_takeaway", None)
+        # The summary and the implications are NOT baked into the picture any
+        # more. They render as live HTML directly beneath it.
+        #
+        # David's call, 2026-08-05, and the reason is what happens in a client
+        # that loads images — which is most of them. The lead's prose used to
+        # exist ONLY as pixels, so with images blocked the Big Signal was a
+        # numeral and one alt line, and with images on it was fine. Rendering it
+        # live fixed the blocked case and immediately broke the common one: the
+        # reader saw the summary and both bullets as pixels, then again as text
+        # eighteen pixels below. Two states, one of them wrong either way.
+        #
+        # So the picture carries the visual, the kicker, the headline and the
+        # CTA, and the words are words. That survives image blocking, dark mode,
+        # screen readers and text scaling, none of which a JPEG does, and it also
+        # ends the baked one-line clip that was amputating the second bullet
+        # inside the image where the renderer's own truncation rules could not
+        # reach it.
+        #
+        # The hash above is unaffected: it is taken from the fields the RENDERER
+        # hashes, before this view is narrowed, exactly as the korean_takeaway
+        # pop above already relies on.
+        bake_view.pop("summary", None)
+        bake_view.pop("implications", None)
         src = lead.get("source_url") or ""
         label = lead.get("source_name") or lead.get("publisher") or ""
         if not label and src:
@@ -990,6 +1014,16 @@ def main() -> int:
         return rc
 
     newsletter = args.newsletter
+
+    # The generation stop, before anything that costs money. Only a FRESH run is
+    # blocked: --from-payload replays the agent's saved output, spends nothing,
+    # and is how preview-send.yml and every render fix work. Exits 0 because a
+    # stop working as intended is not a failure — a non-zero here would turn the
+    # nightly cron red every weekday and train David to ignore it.
+    if generate_stop.is_stopped(REPO_ROOT) and not args.from_payload:
+        print(generate_stop.banner(newsletter, "run_newsletter", REPO_ROOT))
+        return 0
+
     print(f"[{newsletter}] Starting run at {datetime.now(timezone.utc).isoformat()}")
 
     # Load state. Platform newsletters (any briefs/<name>.json audience) may not

@@ -11,10 +11,12 @@ test:
 
 # Fabrication-detection eval — FREE baseline backend (a label-blind numeric
 # heuristic; $0, no API key). The baseline is INTENTIONALLY weak — it's the
-# comparison floor, so a low recall here (~33%) is expected, not a bug. The
-# committed scorecard (tests/evals/scorecard.md, the real Sr. Editor, 100%) is
-# the showcase; reproduce it with `make evals-llm`. Prints only — never
-# overwrites the committed scorecard.
+# comparison floor, so a low recall here (55% on the 19-item set) is expected,
+# not a bug. The committed scorecard (tests/evals/scorecard.md, the real Sr.
+# Editor) is the showcase; reproduce it with `make evals-llm`. Prints only —
+# the baseline and LLM scorecards are separate files, so neither overwrites
+# the other. The canonical harness, with its run history and its own CI, is
+# https://github.com/jungdjh/fabrication-evals — this directory is a mirror.
 evals:
 	$(PYTHON) -m tests.evals.run_evals --backend baseline
 
