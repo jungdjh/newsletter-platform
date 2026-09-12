@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="880" height="400" viewBox="0 0 880 400" font-family="ui-sans-serif, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
   <rect width="880" height="400" fill="#ffffff"/>
   <text x="32" y="44" font-size="22" font-weight="700" fill="#111827">Fabrication-detection eval — Sr. Editor (Claude)</text>
-  <text x="32" y="68" font-size="13" fill="#4b5563">19 labeled items · 11 with a planted fabrication, 8 faithful twins · 3 runs each = 57 judgements · last LLM run 2026-08-01, claude-sonnet-4-6</text>
+  <text x="32" y="68" font-size="13" fill="#4b5563">19 labeled items · 11 with a planted fabrication, 8 faithful twins · 3 runs each = 57 judgements · latest run 2026-09-12, claude-sonnet-4-6</text>
 
   <!-- confusion matrix -->
-  <text x="32" y="112" font-size="14" font-weight="600" fill="#111827">Confusion matrix (positive = fabricated)</text>
+  <text x="32" y="112" font-size="14" font-weight="600" fill="#111827">Confusion matrix, latest run (positive = fabricated)</text>
   <text x="150" y="136" font-size="12" fill="#6b7280" text-anchor="middle">editor flagged</text>
   <text x="290" y="136" font-size="12" fill="#6b7280" text-anchor="middle">editor passed</text>
   <text x="70" y="188" font-size="12" fill="#6b7280" text-anchor="end">fabricated</text>
@@ -19,16 +19,16 @@
   <text x="290" y="204" font-size="11" fill="#991b1b" text-anchor="middle">missed (FN)</text>
 
   <rect x="84" y="228" width="132" height="76" rx="6" fill="#fef3c7" stroke="#d97706"/>
-  <text x="150" y="262" font-size="26" font-weight="700" fill="#78350f" text-anchor="middle">1</text>
-  <text x="150" y="286" font-size="11" fill="#92400e" text-anchor="middle">false alarm (FP) · fab-09</text>
+  <text x="150" y="262" font-size="26" font-weight="700" fill="#78350f" text-anchor="middle">0</text>
+  <text x="150" y="286" font-size="11" fill="#92400e" text-anchor="middle">false alarm (FP)</text>
 
   <rect x="224" y="228" width="132" height="76" rx="6" fill="#e5e7eb" stroke="#6b7280"/>
-  <text x="290" y="262" font-size="26" font-weight="700" fill="#1f2937" text-anchor="middle">23</text>
+  <text x="290" y="262" font-size="26" font-weight="700" fill="#1f2937" text-anchor="middle">24</text>
   <text x="290" y="286" font-size="11" fill="#374151" text-anchor="middle">clean (TN)</text>
 
   <text x="32" y="340" font-size="15" font-weight="700" fill="#111827">Recall 33/33 = 100%</text>
-  <text x="32" y="362" font-size="15" font-weight="700" fill="#111827">False-positive rate 1/24 = 4%</text>
-  <text x="32" y="384" font-size="11" fill="#6b7280">8 clean items is a coarse instrument: 0 or 1 false alarm per pass. Read it as a range.</text>
+  <text x="32" y="362" font-size="15" font-weight="700" fill="#111827">False-positive rate 0/24 = 0%</text>
+  <text x="32" y="384" font-size="11" fill="#6b7280">8 clean items is a coarse instrument: 0 to 2 false alarms per pass. Read it as a range.</text>
 
   <!-- trend -->
   <text x="430" y="112" font-size="14" font-weight="600" fill="#111827">Every recorded pass (tests/evals/history.md)</text>
@@ -37,34 +37,44 @@
   <text x="852" y="154" font-size="10" fill="#9ca3af">100%</text>
   <text x="852" y="304" font-size="10" fill="#9ca3af">0%</text>
 
-  <!-- bars: x positions for 5 runs; height = recall * 150 -->
+  <!-- six LLM passes (recall bars, all 100%) + the baseline -->
   <g>
-    <rect x="450" y="150" width="44" height="150" fill="#2563eb"/>
-    <text x="472" y="318" font-size="10" fill="#374151" text-anchor="middle">07-28</text>
-    <text x="472" y="332" font-size="10" fill="#6b7280" text-anchor="middle">FP 0/24</text>
+    <rect x="440" y="150" width="40" height="150" fill="#2563eb"/>
+    <text x="460" y="318" font-size="10" fill="#374151" text-anchor="middle">07-28</text>
+    <text x="460" y="332" font-size="10" fill="#6b7280" text-anchor="middle">FP 0</text>
 
-    <rect x="520" y="150" width="44" height="150" fill="#2563eb"/>
-    <text x="542" y="318" font-size="10" fill="#374151" text-anchor="middle">07-29</text>
-    <text x="542" y="332" font-size="10" fill="#6b7280" text-anchor="middle">FP 1/24</text>
+    <rect x="492" y="150" width="40" height="150" fill="#2563eb"/>
+    <text x="512" y="318" font-size="10" fill="#374151" text-anchor="middle">07-29</text>
+    <text x="512" y="332" font-size="10" fill="#6b7280" text-anchor="middle">FP 1</text>
 
-    <rect x="590" y="150" width="44" height="150" fill="#2563eb"/>
-    <text x="612" y="318" font-size="10" fill="#374151" text-anchor="middle">07-30</text>
-    <text x="612" y="332" font-size="10" fill="#6b7280" text-anchor="middle">FP 0/24</text>
+    <rect x="544" y="150" width="40" height="150" fill="#2563eb"/>
+    <text x="564" y="318" font-size="10" fill="#374151" text-anchor="middle">07-30</text>
+    <text x="564" y="332" font-size="10" fill="#6b7280" text-anchor="middle">FP 0</text>
 
-    <rect x="660" y="150" width="44" height="150" fill="#2563eb"/>
-    <text x="682" y="318" font-size="10" fill="#374151" text-anchor="middle">08-01</text>
-    <text x="682" y="332" font-size="10" fill="#6b7280" text-anchor="middle">FP 1/24</text>
+    <rect x="596" y="150" width="40" height="150" fill="#2563eb"/>
+    <text x="616" y="318" font-size="10" fill="#374151" text-anchor="middle">08-01</text>
+    <text x="616" y="332" font-size="10" fill="#6b7280" text-anchor="middle">FP 1</text>
 
-    <rect x="760" y="218" width="44" height="82" fill="#9ca3af"/>
-    <text x="782" y="318" font-size="10" fill="#374151" text-anchor="middle">baseline</text>
-    <text x="782" y="332" font-size="10" fill="#6b7280" text-anchor="middle">55% · $0</text>
+    <rect x="648" y="150" width="40" height="150" fill="#2563eb"/>
+    <text x="668" y="318" font-size="10" fill="#374151" text-anchor="middle">09-12</text>
+    <text x="668" y="332" font-size="10" fill="#6b7280" text-anchor="middle">FP 2*</text>
+
+    <rect x="700" y="150" width="40" height="150" fill="#2563eb"/>
+    <text x="720" y="318" font-size="10" fill="#374151" text-anchor="middle">09-12</text>
+    <text x="720" y="332" font-size="10" fill="#6b7280" text-anchor="middle">FP 0</text>
+
+    <rect x="780" y="218" width="40" height="82" fill="#9ca3af"/>
+    <text x="800" y="318" font-size="10" fill="#374151" text-anchor="middle">baseline</text>
+    <text x="800" y="332" font-size="10" fill="#6b7280" text-anchor="middle">55% · $0</text>
   </g>
-  <text x="472" y="142" font-size="11" fill="#1e3a8a" text-anchor="middle">100%</text>
-  <text x="542" y="142" font-size="11" fill="#1e3a8a" text-anchor="middle">100%</text>
-  <text x="612" y="142" font-size="11" fill="#1e3a8a" text-anchor="middle">100%</text>
-  <text x="682" y="142" font-size="11" fill="#1e3a8a" text-anchor="middle">100%</text>
-  <text x="782" y="210" font-size="11" fill="#374151" text-anchor="middle">6/11</text>
+  <text x="460" y="142" font-size="11" fill="#1e3a8a" text-anchor="middle">100%</text>
+  <text x="512" y="142" font-size="11" fill="#1e3a8a" text-anchor="middle">100%</text>
+  <text x="564" y="142" font-size="11" fill="#1e3a8a" text-anchor="middle">100%</text>
+  <text x="616" y="142" font-size="11" fill="#1e3a8a" text-anchor="middle">100%</text>
+  <text x="668" y="142" font-size="11" fill="#1e3a8a" text-anchor="middle">100%</text>
+  <text x="720" y="142" font-size="11" fill="#1e3a8a" text-anchor="middle">100%</text>
+  <text x="800" y="210" font-size="11" fill="#374151" text-anchor="middle">6/11</text>
 
-  <text x="430" y="362" font-size="11" fill="#4b5563">Blue: recall of the real editor, 3 runs × 11 fabricated items. Grey: the free label-blind</text>
-  <text x="430" y="378" font-size="11" fill="#4b5563">numeric baseline on the same items (2026-09-11). Same fixtures, same prompt: a move here is the model moving.</text>
+  <text x="430" y="362" font-size="11" fill="#4b5563">Blue: recall of the real editor, 3 runs × 11 fabricated items; FP = false alarms out of 24. Grey: the free numeric baseline.</text>
+  <text x="430" y="378" font-size="11" fill="#4b5563">* the editor was right: a fixture labeled faithful carried an unsupported claim. Fixed after the run; the row stays as measured.</text>
 </svg>

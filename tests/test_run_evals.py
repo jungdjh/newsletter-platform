@@ -82,6 +82,10 @@ def test_faithful_item_is_a_false_alarm_only_for_fabrication_language():
     assert R.score_llm(["Sourced only to the vendor newsroom"], None) == "PASS"
     assert R.score_llm(["'first for strap-only wearables' is not supported by the excerpt"], None) == "FAIL"
     assert R.score_llm(["The $1.1B figure does not appear in the excerpt"], None) == "FAIL"
+    # 2026-09-12: three runs flagged the same unsupported implication; two said
+    # "no mention of", one said "no reference to", and the third scored as
+    # clean. The scorer must not depend on which synonym the editor picked.
+    assert R.score_llm(["the excerpt mentions only a 2027 deadline with no reference to verifiable credentials"], None) == "FAIL"
 
 
 def test_marker_match_is_case_insensitive_and_substring():

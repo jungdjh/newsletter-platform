@@ -22,3 +22,5 @@ rather than as whichever run finished last.
 | 2026-07-30 | llm | claude-sonnet-4-6 | 3 | 33/33 = 100% | 0/24 = 0% | none | none |
 | 2026-08-01 | llm | claude-sonnet-4-6 | 3 | 33/33 = 100% | 1/24 = 4% | none | fab-09 |
 | 2026-09-11 | baseline | n/a (offline heuristic) | 1 | 6/11 = 55% | 0/8 = 0% | fab-06, fab-12, nurse-01, nurse-02, nurse-03 | none |
+| 2026-09-12 | llm | claude-sonnet-4-6 | 3 | 33/33 = 100% | 2/24 = 8% | none | fab-07 |
+| 2026-09-12 | llm | claude-sonnet-4-6 | 3 | 33/33 = 100% | 0/24 = 0% | none | none |

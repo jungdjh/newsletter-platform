@@ -105,7 +105,10 @@ _FAB_FLAG = re.compile(
     r"no support in|fabricat|invented|made up|not found in|is ?n.?t in the excerpt|"
     r"unsupported by|no basis in|not backed by|contradict|does ?n.?t match the excerpt|"
     r"absent from the excerpt|no mention of|contains no mention|factual error|"
-    r"discrepanc|mismatch|not (?:mentioned|stated|reflected) in the (?:source[_ ])?excerpt",
+    r"discrepanc|mismatch|not (?:mentioned|stated|reflected) in the (?:source[_ ])?excerpt|"
+    # 2026-09-12: the editor said "no reference to" on one of three identical
+    # flags and that run scored as clean. Same catch, different verb.
+    r"no reference to|nothing in the excerpt|excerpt (?:does ?n.?t|never) (?:mention|state|say)",
     re.I,
 )
 
